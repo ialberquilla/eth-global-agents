@@ -37,3 +37,4 @@ next-env.d.ts
 
 .vscode
 frontend/node_modules
+frontend/.next
