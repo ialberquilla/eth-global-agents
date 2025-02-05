@@ -20,11 +20,11 @@ const ValidationSchema = z.object({
     extractedInfo: z.object({
       protocols: z.array(z.string()),
       chains: z.array(z.string()),
-      temporal: z.string(),
+      temporal: z.string().default("none"),
       metrics: z.array(z.string()),
       specialRequirements: z.object({
         needsComparison: z.boolean(),
-        sortBy: z.string(),
+        sortBy: z.string().default("none"),
         additionalFilters: z.array(z.string())
       })
     })
@@ -55,6 +55,7 @@ const modifiers = {
     - For DeFi protocols, always include price and volume metrics
     - For yield queries, include APY, TVL, volume_24h as default metrics
     - If user mentions "best", add comparison/ranking requirements
+    - For invalid requests, use "none" for temporal and sortBy fields (never use null)
     
     You must respond with a JSON object having this exact structure:
     {
@@ -63,12 +64,29 @@ const modifiers = {
       "extractedInfo": {
         "protocols": string[],
         "chains": string[],
-        "temporal": string,
+        "temporal": string,  // use "none" for invalid requests
         "metrics": string[],
         "specialRequirements": {
           "needsComparison": boolean,
-          "sortBy": string,
+          "sortBy": string,  // use "none" for invalid requests
           "additionalFilters": string[]
+        }
+      }
+    }
+    
+    Example for invalid request:
+    {
+      "isValidRequest": false,
+      "reason": "This request is not related to web3 data",
+      "extractedInfo": {
+        "protocols": [],
+        "chains": [],
+        "temporal": "none",
+        "metrics": [],
+        "specialRequirements": {
+          "needsComparison": false,
+          "sortBy": "none",
+          "additionalFilters": []
         }
       }
     }
@@ -188,6 +206,7 @@ initialize().then(({ validatorAgent, matcherAgent, config }) => {
 app.post('/chat', async (req, res) => {
   try {
     const { message } = req.body;
+    console.log('Received message:', message);
 
     if (!message) {
       return res.status(400).json({ error: 'Message is required' });
@@ -197,22 +216,32 @@ app.post('/chat', async (req, res) => {
       return res.status(503).json({ error: 'Agents not initialized' });
     }
 
+    // Set headers for SSE
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Access-Control-Allow-Origin', '*');
 
-    const validationResult = await agents.validatorAgent.invoke(
-      { messages: [new HumanMessage(message)] },
-      agentConfig
-    );
+    // Send initial connection established message
+    res.write('data: {"type":"connection","content":"established"}\n\n');
 
-    const validatedData = parseAndValidateOutput(
-      validationResult.messages[validationResult.messages.length - 1].content,
-      ValidationSchema
-    );
+    try {
+      console.log('Invoking validator agent...');
+      const validationResult = await agents.validatorAgent.invoke(
+        { messages: [new HumanMessage(message)] },
+        agentConfig
+      );
+      console.log('Validation result:', validationResult.messages[validationResult.messages.length - 1].content);
 
-    if (validatedData.isValidRequest) {
+      const validatedData = parseAndValidateOutput(
+        validationResult.messages[validationResult.messages.length - 1].content,
+        ValidationSchema
+      );
+      console.log('Parsed validation data:', validatedData);
+
+      if (validatedData.isValidRequest) {
         const { extractedInfo } = validatedData;
+        console.log('Request is valid, sending validation response');
 
         const response = {
           type: 'validation',
@@ -229,21 +258,60 @@ app.post('/chat', async (req, res) => {
           }
         };
 
-        res.write(`data: ${JSON.stringify(response)}\n\n`);
-    } else {
+        // Send validation response
+        const validationMessage = `data: ${JSON.stringify(response)}\n\n`;
+        console.log('Sending validation message:', validationMessage);
+        res.write(validationMessage);
+
+      } else {
+        console.log('Request is invalid, sending error response');
+        const errorResponse = {
+          type: 'error',
+          content: {
+            summary: validatedData.reason || 'Sorry, I can\'t help with that. Please try again with request related to web3 data.',
+            details: 'Please provide a request related to blockchain or web3 data analysis.'
+          }
+        };
+        const errorMessage = `data: ${JSON.stringify(errorResponse)}\n\n`;
+        console.log('Sending error message:', errorMessage);
+        res.write(errorMessage);
+      }
+
+    } catch (innerError) {
+      console.error('Inner error:', innerError);
       const errorResponse = {
         type: 'error',
-        content: 'Sorry, I can\'t help with that. Please try again with request related to web3 data.'
+        content: {
+          summary: 'Sorry, I encountered an error processing your request.',
+          details: 'Please try again with your request.'
+        }
       };
       res.write(`data: ${JSON.stringify(errorResponse)}\n\n`);
     }
 
+    // Always send DONE event and end response
+    console.log('Sending DONE event');
     res.write('data: [DONE]\n\n');
     res.end();
+
   } catch (error) {
-    console.error('Error in chat endpoint:', error);
+    console.error('Outer error:', error);
     if (!res.headersSent) {
-      res.status(500).json({ error: 'Internal server error' });
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      
+      const errorResponse = {
+        type: 'error',
+        content: {
+          summary: 'An unexpected error occurred.',
+          details: 'Please try again with your request.'
+        }
+      };
+      res.write(`data: ${JSON.stringify(errorResponse)}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
     }
   }
 });
