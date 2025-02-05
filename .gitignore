@@ -41,3 +41,4 @@ frontend/.next
 backend/node_modules
 backend/.next
 backend/dist
+backend/.env
