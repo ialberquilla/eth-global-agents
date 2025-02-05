@@ -17,6 +17,8 @@
     "strictBindCallApply": true,
     "forceConsistentCasingInFileNames": true,
     "noFallthroughCasesInSwitch": true,
+    "types": ["node"],
+    "lib": ["ES2021"],
     "paths": {
       "@/*": ["src/*"]
     }

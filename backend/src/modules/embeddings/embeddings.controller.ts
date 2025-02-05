@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Post, Query } from '@nestjs/common';
 import { EmbeddingsService } from './embeddings.service';
 import { GenerateEmbeddingDto } from './dto/generate-embedding.dto';
 
@@ -14,4 +14,5 @@ export class EmbeddingsController {
       data: result
     };
   }
+
 } 

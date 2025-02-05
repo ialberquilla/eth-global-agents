@@ -1,13 +1,17 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-
+import { ConfigService } from '@nestjs/config';
 @Injectable()
 export class EmbeddingsService implements OnModuleInit {
   private genAI: GoogleGenerativeAI;
   private embeddingModel: any;
 
+  constructor(
+    private configService: ConfigService
+  ) {}
+
   async onModuleInit() {
-    this.genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY || '');
+    this.genAI = new GoogleGenerativeAI( this.configService.get<string>('GOOGLE_AI_API_KEY') || '');
     this.embeddingModel = this.genAI.getGenerativeModel({ model: "text-embedding-004" });
   }
 
