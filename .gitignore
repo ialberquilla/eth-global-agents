@@ -42,3 +42,5 @@ backend/node_modules
 backend/.next
 backend/dist
 backend/.env
+agent/.env
+agent/node_modules
