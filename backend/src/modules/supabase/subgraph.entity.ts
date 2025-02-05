@@ -5,28 +5,28 @@ export class Subgraph {
   @PrimaryColumn('text')
   id: string;
 
-  @Column('text')
+  @Column('text', { nullable: true })
   name: string;
 
-  @Column('text')
+  @Column('text', { nullable: true })
   protocol: string;
 
-  @Column('text')
+  @Column('text', { nullable: true })
   chain: string;
 
-  @Column('integer')
+  @Column('integer', { nullable: true })
   queries_per_day: number;
 
-  @Column('integer')
+  @Column('integer', { nullable: true })
   stake_amount: number;
 
-  @Column('text')
+  @Column('text', { nullable: true })
   url: string;
 
   @Column('jsonb', { nullable: true })
   embedding: number[];
 
-  @Column('text')
+  @Column('text', { nullable: true })
   schema: string;
 
   @Column('text', { array: true })
