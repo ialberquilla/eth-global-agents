@@ -7,6 +7,8 @@ import constants from './constants';
 import { Subgraph } from './modules/supabase/subgraph.entity';
 import { ScheduleModule } from '@nestjs/schedule';
 import { StoredQuery } from './modules/supabase/storedQuery.entity';
+
+
 @Module({
   imports: [
     ScheduleModule.forRoot(),

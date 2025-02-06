@@ -44,3 +44,9 @@ backend/dist
 backend/.env
 agent/.env
 agent/node_modules
+agent/dist
+
+frontend/node_modules
+frontend/.next
+frontend/dist
+frontend/.env

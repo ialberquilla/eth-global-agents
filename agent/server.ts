@@ -13,6 +13,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3002';
+
 const ValidationSchema = z.object({
     isValidRequest: z.boolean(),
     reason: z.string(),
@@ -311,7 +313,7 @@ app.post('/chat', async (req, res) => {
 
         for (const protocol of extractedInfo.protocols) {
           for (const chain of extractedInfo.chains) {
-            const subgraphs = await fetch('http://localhost:3002/api/subgraphs/similar?name=' + protocol + ' ' + chain).then(res => res.json()) as any[];
+            const subgraphs = await fetch(BACKEND_URL + '/api/subgraphs/similar?name=' + protocol + ' ' + chain).then(res => res.json()) as any[];
 
             subgrapsToAnalize.push(...subgraphs.filter((subgraph: any) => 
               subgraph.schema && 
@@ -369,7 +371,7 @@ app.post('/chat', async (req, res) => {
 
         console.log('Storing queries...');
 
-        const storeResponse = await fetch('http://localhost:3002/api/subgraphs/store', {
+        const storeResponse = await fetch(BACKEND_URL + '/api/subgraphs/store', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
