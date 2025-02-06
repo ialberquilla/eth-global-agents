@@ -3,11 +3,11 @@
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
-import { useState } from "react"
+import { useState, useCallback } from "react"
 
 type ResponseContent = {
   summary?: string
-  details?: string
+  details?: string | any[]
   recommendedSubgraphs?: Array<{
     id: string
     url: string
@@ -19,7 +19,7 @@ type ResponseContent = {
 }
 
 type Response = {
-  type?: 'validation' | 'subgraphs' | 'matches' | 'search' | 'error'
+  type?: 'validation' | 'subgraphs' | 'queries' | 'matches' | 'search' | 'error'
   content?: ResponseContent | string
   message?: string
   error?: string
@@ -30,11 +30,16 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false)
   const [responses, setResponses] = useState<Response[]>([])
 
+  const addResponse = useCallback((newResponse: Response) => {
+    setResponses(prev => [...prev, newResponse])
+  }, [])
+
   const handleGenerate = async () => {
     if (!prompt.trim()) return
     
     setIsLoading(true)
     setResponses([])
+    console.log('Starting new request...')
 
     try {
       const response = await fetch('http://localhost:3000/chat', {
@@ -48,127 +53,141 @@ export default function Home() {
       const reader = response.body?.getReader()
       if (!reader) throw new Error('No reader available')
 
+      let buffer = ''
+
       while (true) {
         const { done, value } = await reader.read()
-        if (done) break
+        if (done) {
+          console.log('Stream complete')
+          break
+        }
 
         // Convert the chunk to text
         const chunk = new TextDecoder().decode(value)
-        const lines = chunk.split('\n')
+        console.log('Received chunk:', chunk)
+        
+        buffer += chunk
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
 
-        // Process each line
-        lines.forEach(line => {
+        for (const line of lines) {
+          if (line.trim() === '') continue
+          
           if (line.startsWith('data: ')) {
             const data = line.slice(6)
-            if (data === '[DONE]') return
+            console.log('Processing data line:', data)
+            
+            if (data === '[DONE]') {
+              console.log('Received DONE signal')
+              continue
+            }
 
             try {
               const parsedData = JSON.parse(data)
-              setResponses(prev => [...prev, parsedData])
+              console.log('Parsed response:', parsedData)
+              console.log('Current responses before update:', responses)
+              setResponses(prev => {
+                console.log('Previous responses in update:', prev)
+                const newResponses = [...prev, parsedData]
+                console.log('New responses after update:', newResponses)
+                return newResponses
+              })
             } catch (e) {
-              // Handle plain text responses
-              setResponses(prev => [...prev, { message: data }])
+              console.error('Error parsing response:', e)
             }
           }
-        })
+        }
       }
+
     } catch (error) {
-      console.error('Error generating API:', error)
-      setResponses([{ error: 'Failed to generate API. Please try again.' }])
+      console.error('Error in request:', error)
+      setResponses(prev => [...prev, { error: 'Failed to generate API. Please try again.' }])
     } finally {
       setIsLoading(false)
     }
   }
 
-  const renderResponse = () => {
-    if (responses.length === 0) return null
+  const renderResponse = (response: Response, index: number) => {
+    if (!response) return null
 
-    return (
-      <div className="mt-6 space-y-4">
-        {responses.map((response, index) => {
-          if (response.error) {
-            return (
-              <div key={index} className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-red-500">
-                {response.error}
-              </div>
-            )
-          }
+    if (response.error) {
+      return (
+        <div key={index} className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-red-500">
+          {response.error}
+        </div>
+      )
+    }
 
-          if (response.type === 'error' && response.content) {
-            const content = response.content as ResponseContent
-            return (
-              <div key={index} className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
-                <h3 className="text-lg font-semibold text-red-500 mb-2">{content.summary}</h3>
-                <pre className="whitespace-pre-wrap text-red-400 font-mono text-sm">
-                  {content.details}
+    if (response.type === 'error' && response.content) {
+      const content = response.content as ResponseContent
+      return (
+        <div key={index} className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
+          <h3 className="text-lg font-semibold text-red-500 mb-2">{content.summary}</h3>
+          <pre className="whitespace-pre-wrap text-red-400 font-mono text-sm">
+            {content.details}
+          </pre>
+        </div>
+      )
+    }
+
+    if ((response.type === 'validation' || response.type === 'subgraphs') && response.content) {
+      const content = response.content as ResponseContent
+      return (
+        <div key={index} className="p-4 bg-slate-800/50 rounded-lg">
+          <h3 className="text-lg font-semibold text-slate-200 mb-2">
+            {content.summary}
+          </h3>
+          <pre className="whitespace-pre-wrap text-slate-400 font-mono text-sm">
+            {content.details}
+          </pre>
+        </div>
+      )
+    }
+
+    if (response.type === 'queries' && response.content) {
+      const content = response.content as ResponseContent
+      return (
+        <div key={index} className="p-4 bg-slate-800/50 rounded-lg">
+          <h3 className="text-lg font-semibold text-slate-200 mb-2">
+            {content.summary}
+          </h3>
+          <div className="space-y-4">
+            {Array.isArray(content.details) && content.details.map((query: any, idx: number) => (
+              <div key={idx} className="border border-slate-700 rounded-lg p-4">
+                <div className="text-slate-300 font-medium mb-2">Subgraph: {query.subgraph}</div>
+                <pre className="bg-slate-900/50 p-3 rounded-md text-slate-300 text-sm overflow-x-auto">
+                  {query.query}
                 </pre>
-              </div>
-            )
-          }
-
-          if (response.type === 'validation' && response.content) {
-            return (
-              <div key={index} className="p-4 bg-slate-800/50 rounded-lg">
-                <h3 className="text-lg font-semibold text-slate-200 mb-2">
-                  {(response.content as ResponseContent).summary}
-                </h3>
-                <pre className="whitespace-pre-wrap text-slate-400 font-mono text-sm">
-                  {(response.content as ResponseContent).details}
-                </pre>
-              </div>
-            )
-          }
-
-          if (response.type === 'subgraphs' && response.content) {
-            return (
-              <div key={index} className="p-4 bg-slate-800/50 rounded-lg">
-                <h3 className="text-lg font-semibold text-slate-200 mb-2">
-                  {(response.content as ResponseContent).summary}
-                </h3>
-                <pre className="whitespace-pre-wrap text-slate-400 font-mono text-sm">
-                  {(response.content as ResponseContent).details}
-                </pre>
-              </div>
-            )
-          }
-
-          if (response.type === 'matches' && response.content) {
-            return (
-              <div key={index}>
-                <h3 className="text-lg font-semibold text-slate-200">Recommended Subgraphs:</h3>
-                <div className="space-y-3">
-                  {(response.content as ResponseContent).recommendedSubgraphs?.map((subgraph, idx) => (
-                    <div key={idx} className="p-4 bg-slate-800/50 rounded-lg">
-                      <div className="font-medium text-slate-200">{subgraph.url}</div>
-                      <div className="text-sm text-slate-400 mt-1">{subgraph.reason}</div>
-                      <div className="text-sm text-slate-500 mt-1">Relevance: {subgraph.relevanceScore}</div>
+                {query.mappings && query.mappings.length > 0 && (
+                  <div className="mt-3">
+                    <div className="text-slate-400 text-sm mb-2">Field Mappings:</div>
+                    <div className="grid grid-cols-3 gap-2 text-sm">
+                      {query.mappings.map((mapping: any, mapIdx: number) => (
+                        <div key={mapIdx} className="bg-slate-900/30 p-2 rounded">
+                          <span className="text-slate-400">{mapping.field}</span>
+                          <span className="text-slate-500 mx-2">→</span>
+                          <span className="text-slate-300">{mapping.alias}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  </div>
+                )}
               </div>
-            )
-          }
+            ))}
+          </div>
+        </div>
+      )
+    }
 
-          if (response.type === 'search' && response.content) {
-            return (
-              <div key={index} className="p-4 bg-slate-800/50 rounded-lg">
-                <div className="text-slate-200">{response.content.toString()}</div>
-              </div>
-            )
-          }
+    if (response.message) {
+      return (
+        <div key={index} className="p-4 bg-slate-800/50 rounded-lg">
+          <div className="text-slate-200">{response.message}</div>
+        </div>
+      )
+    }
 
-          if (response.message) {
-            return (
-              <div key={index} className="p-4 bg-slate-800/50 rounded-lg">
-                <div className="text-slate-200">{response.message}</div>
-              </div>
-            )
-          }
-
-          return null
-        })}
-      </div>
-    )
+    return null
   }
 
   return (
@@ -209,7 +228,9 @@ export default function Home() {
           </div>
 
           {/* Response Section */}
-          {renderResponse()}
+          <div className="mt-6 space-y-4">
+            {responses.map((response, index) => renderResponse(response, index))}
+          </div>
         </CardContent>
       </Card>
     </main>

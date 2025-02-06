@@ -29,6 +29,18 @@ const ValidationSchema = z.object({
     })
   });
 
+  const QueryGeneratorSchema = z.object({
+    queries: z.array(z.object({
+      subgraphId: z.string(),
+      query: z.string(),
+      mappings: z.array(z.object({
+        field: z.string(),
+        alias: z.string(),
+        transformation: z.string().optional()
+      }))
+    }))
+  });
+
 const modifiers = {
     requestValidator: `
     You are a specialized agent for validating and enriching web3 data requests.
@@ -99,13 +111,79 @@ const modifiers = {
     Ensure your response is valid JSON and follows this structure exactly.
   `,
   queryGenerator: `
-    You are a specialized agent for generating queries to subgraphs.
+    You are a specialized agent for generating optimized GraphQL queries for subgraphs.
+    Your job is to:
+    1. Analyze the provided subgraph schemas
+    2. Generate clean, simple queries that fetch the required metrics
+    3. Include field mappings for data unification
+    
+    Consider these rules when generating queries:
+    - Keep queries simple and direct
+    - Focus only on the fields needed for yield analysis
+    - Add proper field aliases directly in the query
+    - Include pagination (first: 1000)
+    - Don't use fragments unless absolutely necessary
+
     You must respond with a JSON object having this exact structure:
     {
-      "query": string
+      "queries": [
+        {
+          "subgraphId": string,
+          "query": string,
+          "mappings": [
+            {
+              "field": string,
+              "alias": string,
+              "transformation": string (optional)
+            }
+          ]
+        }
+      ]
+    }
+    
+    Example response:
+    {
+      "queries": [
+        {
+          "subgraphId": "aave_v3_arbitrum",
+          "query": """
+            query {
+              reserves(first: 1000) {
+                id
+                symbol
+                totalLiquidity
+                totalBorrowsVariable
+                liquidityRate
+                price {
+                  priceInUsd
+                }
+              }
+            }
+          """,
+          "mappings": [
+            {
+              "field": "totalLiquidity",
+              "alias": "total_supplied",
+              "transformation": "parseFloat"
+            },
+            {
+              "field": "liquidityRate",
+              "alias": "apy",
+              "transformation": "parseFloat"
+            }
+          ]
+        }
+      ]
     }
   `
 };
+
+interface SubgraphInfo {
+  id: string;
+  name: string;
+  schema: string;
+  url: string;
+}
 
 function parseAndValidateOutput(output: string, schema: z.ZodSchema) {
   try {
@@ -116,6 +194,13 @@ function parseAndValidateOutput(output: string, schema: z.ZodSchema) {
     }
 
     jsonStr = jsonStr.trim();
+    
+    // Replace triple quotes with single quotes in GraphQL queries
+    jsonStr = jsonStr.replace(/"""\s*([^]*?)\s*"""/g, function(match, query) {
+      // Escape newlines and quotes in the query
+      return '"' + query.trim().replace(/\n/g, '\\n').replace(/"/g, '\\"') + '"';
+    });
+
     const parsed = JSON.parse(jsonStr);
     return schema.parse(parsed);
   } catch (error) {
@@ -165,6 +250,11 @@ initialize().then(({ validatorAgent, queryGeneratorAgent, config }) => {
   process.exit(1);
 });
 
+// Helper function to send SSE message
+const sendSSEMessage = (res: any, data: any) => {
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+};
+
 app.post('/chat', async (req, res) => {
   try {
     const { message } = req.body;
@@ -184,22 +274,17 @@ app.post('/chat', async (req, res) => {
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('Access-Control-Allow-Origin', '*');
 
-    // Send initial connection established message
-    res.write('data: {"type":"connection","content":"established"}\n\n');
-
     try {
       console.log('Invoking validator agent...');
       const validationResult = await agents.validatorAgent.invoke(
         { messages: [new HumanMessage(message)] },
         agentConfig
       );
-      console.log('Validation result:', validationResult.messages[validationResult.messages.length - 1].content);
 
       const validatedData = parseAndValidateOutput(
         validationResult.messages[validationResult.messages.length - 1].content,
         ValidationSchema
       );
-      console.log('Parsed validation data:', validatedData);
 
       if (validatedData.isValidRequest) {
         const { extractedInfo } = validatedData;
@@ -220,9 +305,7 @@ app.post('/chat', async (req, res) => {
           }
         };
 
-        const validationMessage = `data: ${JSON.stringify(response)}\n\n`;
-        console.log('Sending validation message:', validationMessage);
-        res.write(validationMessage);
+        sendSSEMessage(res, response);
 
         const subgrapsToAnalize = []
 
@@ -230,7 +313,6 @@ app.post('/chat', async (req, res) => {
           for (const chain of extractedInfo.chains) {
             const subgraphs = await fetch('http://localhost:3002/api/subgraphs/similar?name=' + protocol + ' ' + chain).then(res => res.json()) as any[];
 
-            console.log('Subgraphs:', subgraphs);
             subgrapsToAnalize.push(...subgraphs.filter((subgraph: any) => 
               subgraph.schema && 
               subgraph.name.toLowerCase().includes(protocol.toLowerCase()) && 
@@ -247,40 +329,70 @@ app.post('/chat', async (req, res) => {
           }
         };
 
-        const subgraphsMessage = `data: ${JSON.stringify(subgraphsResponse)}\n\n`;
-        console.log('Sending subgraphs message:', subgraphsMessage);
-        res.write(subgraphsMessage);
+        sendSSEMessage(res, subgraphsResponse);
+
+        console.log('Generating queries for subgraphs...');
+
+        const queryGenInput = {
+          requirements: validatedData.extractedInfo,
+          subgraphs: subgrapsToAnalize.map(s => ({
+            id: s.id,
+            name: s.name,
+            schema: s.schema,
+            url: s.url
+          }))
+        };
+
+        const queryGenResult = await agents.queryGeneratorAgent.invoke(
+          { messages: [new HumanMessage(JSON.stringify(queryGenInput))] },
+          agentConfig
+        );
+
+        const parsedQueries = parseAndValidateOutput(
+          queryGenResult.messages[queryGenResult.messages.length - 1].content,
+          QueryGeneratorSchema
+        );
+
+        const queriesResponse = {
+          type: 'queries',
+          content: {
+            summary: `Generated ${parsedQueries.queries.length} optimized queries`,
+            details: parsedQueries.queries.map((q: any) => ({
+              subgraph: q.subgraphId,
+              query: q.query.trim(),
+              mappings: q.mappings
+            }))
+          }
+        };
+
+        sendSSEMessage(res, queriesResponse);
 
       } else {
-        console.log('Request is invalid, sending error response');
         const errorResponse = {
           type: 'error',
           content: {
-            summary: validatedData.reason || 'Sorry, I can\'t help with that. Please try again with request related to web3 data.',
+            summary: validatedData.reason,
             details: 'Please provide a request related to blockchain or web3 data analysis.'
           }
         };
-        const errorMessage = `data: ${JSON.stringify(errorResponse)}\n\n`;
-        console.log('Sending error message:', errorMessage);
-        res.write(errorMessage);
+        sendSSEMessage(res, errorResponse);
       }
+
+      sendSSEMessage(res, '[DONE]');
+      res.end();
 
     } catch (innerError) {
       console.error('Inner error:', innerError);
-      const errorResponse = {
+      sendSSEMessage(res, {
         type: 'error',
         content: {
           summary: 'Sorry, I encountered an error processing your request.',
           details: 'Please try again with your request.'
         }
-      };
-      res.write(`data: ${JSON.stringify(errorResponse)}\n\n`);
+      });
+      sendSSEMessage(res, '[DONE]');
+      res.end();
     }
-
-    // Always send DONE event and end response
-    console.log('Sending DONE event');
-    res.write('data: [DONE]\n\n');
-    res.end();
 
   } catch (error) {
     console.error('Outer error:', error);
@@ -290,15 +402,14 @@ app.post('/chat', async (req, res) => {
       res.setHeader('Connection', 'keep-alive');
       res.setHeader('Access-Control-Allow-Origin', '*');
       
-      const errorResponse = {
+      sendSSEMessage(res, {
         type: 'error',
         content: {
           summary: 'An unexpected error occurred.',
           details: 'Please try again with your request.'
         }
-      };
-      res.write(`data: ${JSON.stringify(errorResponse)}\n\n`);
-      res.write('data: [DONE]\n\n');
+      });
+      sendSSEMessage(res, '[DONE]');
       res.end();
     }
   }
