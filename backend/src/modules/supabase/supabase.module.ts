@@ -4,10 +4,11 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Subgraph } from './subgraph.entity';
 import { EmbeddingsService } from '../embeddings/embeddings.service';
 import { SubgraphsController } from './subgraph.controller';
+import { StoredQuery } from './storedQuery.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Subgraph])
+    TypeOrmModule.forFeature([Subgraph, StoredQuery])
   ],
   providers: [SupabaseService, EmbeddingsService],
   exports: [SupabaseService],

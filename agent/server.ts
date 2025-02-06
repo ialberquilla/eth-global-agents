@@ -367,6 +367,22 @@ app.post('/chat', async (req, res) => {
 
         sendSSEMessage(res, queriesResponse);
 
+        console.log('Storing queries...');
+
+        const storeResponse = await fetch('http://localhost:3002/api/subgraphs/store', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            path: 'tbd',
+            subgraph_queries: parsedQueries.queries,
+            requirements: validatedData.extractedInfo
+          })
+        });
+
+        console.log('Stored queries:', storeResponse);
+
       } else {
         const errorResponse = {
           type: 'error',

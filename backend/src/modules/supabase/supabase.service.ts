@@ -5,6 +5,7 @@ import { Subgraph } from './subgraph.entity';
 import { EmbeddingsService } from '../embeddings/embeddings.service';
 import * as fs from 'fs';
 import { ConfigService } from '@nestjs/config';
+import { StoredQuery } from './storedQuery.entity';
 
 
 @Injectable()
@@ -12,6 +13,8 @@ export class SupabaseService implements OnModuleInit {
   constructor(
     @InjectRepository(Subgraph)
     private subgraphRepository: Repository<Subgraph>,
+    @InjectRepository(StoredQuery)
+    private storedQueryRepository: Repository<StoredQuery>,
     private embeddingsService: EmbeddingsService,
     private configService: ConfigService
   ) { }
@@ -161,5 +164,142 @@ export class SupabaseService implements OnModuleInit {
     const data = await result.json() as { data: { __schema: any } };
 
     return data.data.__schema;
+  }
+
+  async storeQuery(path: string, subgraph_queries: any[], requirements: any[]) {
+
+    console.log({ path, subgraph_queries, requirements });
+    const query = this.storedQueryRepository.create({ path, subgraph_queries, requirements });
+    return await this.storedQueryRepository.save(query);
+  }
+
+
+  async executeQuery(path: string) {
+    const query = await this.storedQueryRepository.findOne({ where: { path } });
+    if (!query) {
+      throw new Error('Query not found');
+    }
+    const results = await Promise.all(
+      query.subgraph_queries.map(async (sq: any) => {
+        try {
+          const response = await fetch(
+            `https://gateway.thegraph.com/api/${this.configService.get('THEGRAPH_API_KEY')}/subgraphs/id/${sq.subgraphId}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ query: sq.query })
+            }
+          );
+
+          const data = await response.json();
+
+          console.log({ data });
+
+          const transformedData = await this.transformSubgraphData(data, sq.mappings);
+
+          console.log({ transformedData });
+
+          return {
+            subgraphId: sq.subgraphId,
+            data: transformedData
+          };
+
+        } catch (error) {
+          console.error(`Error fetching from subgraph ${sq.subgraphId}:`, error);
+          return {
+            subgraphId: sq.subgraphId,
+            error: 'Failed to fetch data'
+          };
+        }
+      })
+    );
+
+    const mergedData = this.mergeSubgraphData(results, query.requirements);
+
+    return mergedData;
+
+
+  }
+
+  async transformSubgraphData(data: any, mappings: any[]) {
+    const result = [];
+
+    const firstKey = Object.keys(data.data)[0];
+    const items = data.data[firstKey];
+
+    for (const item of items) {
+      const transformed: any = {};
+
+      for (const mapping of mappings) {
+        let value = item;
+
+        const fieldParts = mapping.field.split('.');
+        for (const part of fieldParts) {
+          value = value?.[part];
+        }
+
+        if (mapping.transformation) {
+          value = await this.applyTransformation(value, mapping.transformation);
+        }
+
+        transformed[mapping.alias] = value;
+      }
+
+      result.push(transformed);
+    }
+
+    return result;
+  }
+
+  async mergeSubgraphData(results: any[], requirements: any) {
+    const allData = results
+      .filter(r => !r.error)
+      .flatMap(r => r.data);
+
+    if (requirements.specialRequirements.sortBy !== 'none') {
+      allData.sort((a, b) => {
+        const field = requirements.specialRequirements.sortBy;
+        return b[field] - a[field]; 
+      });
+    }
+
+    const filteredData = await this.applyFilters(allData, requirements.specialRequirements.additionalFilters);
+
+    return filteredData;
+  }
+
+  async applyFilters(data: any[], filters: string[]) {
+    return data.filter(item => {
+      return filters.every(filter => {
+        const [field, operation, value] = filter.split(':');
+        const itemValue = item[field];
+
+        switch (operation) {
+          case 'min':
+            return itemValue >= parseFloat(value);
+          case 'max':
+            return itemValue <= parseFloat(value);
+          default:
+            return true;
+        }
+      });
+    });
+  }
+
+
+  async applyTransformation(value: any, transformation: string) {
+    const transformations: Record<string, Function> = {
+      'parseFloat': (v: string) => parseFloat(v),
+      'parseInt': (v: string) => parseInt(v),
+      'toString': (v: any) => String(v),
+      'toFixed2': (v: number) => Number(parseFloat(String(v)).toFixed(2)),
+      'multiply100': (v: number) => v * 100, 
+    };
+
+    if (transformation in transformations) {
+      return transformations[transformation](value);
+    }
+
+    return value;
   }
 } 

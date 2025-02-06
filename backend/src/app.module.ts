@@ -6,7 +6,7 @@ import { SupabaseModule } from './modules/supabase/supabase.module';
 import constants from './constants';
 import { Subgraph } from './modules/supabase/subgraph.entity';
 import { ScheduleModule } from '@nestjs/schedule';
-
+import { StoredQuery } from './modules/supabase/storedQuery.entity';
 @Module({
   imports: [
     ScheduleModule.forRoot(),
@@ -21,7 +21,7 @@ import { ScheduleModule } from '@nestjs/schedule';
       username: 'postgres.ohrqztdnojluxkxbnekj',
       password: process.env.DB_PASSWORD,
       database: 'postgres',
-      entities: [Subgraph],
+      entities: [Subgraph, StoredQuery],
       synchronize: false,
       ssl: {
         rejectUnauthorized: false
