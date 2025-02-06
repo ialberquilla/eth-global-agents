@@ -19,7 +19,7 @@ type ResponseContent = {
 }
 
 type Response = {
-  type?: 'validation' | 'matches' | 'search'
+  type?: 'validation' | 'matches' | 'search' | 'error'
   content?: ResponseContent | string
   message?: string
   error?: string
@@ -93,6 +93,18 @@ export default function Home() {
       return (
         <div className="mt-6 p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-red-500">
           {response.error}
+        </div>
+      )
+    }
+
+    if (response.type === 'error' && response.content) {
+      const content = response.content as ResponseContent
+      return (
+        <div className="mt-6 p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
+          <h3 className="text-lg font-semibold text-red-500 mb-2">{content.summary}</h3>
+          <pre className="whitespace-pre-wrap text-red-400 font-mono text-sm">
+            {content.details}
+          </pre>
         </div>
       )
     }

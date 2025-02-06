@@ -4,14 +4,17 @@ import { Repository } from 'typeorm';
 import { Subgraph } from './subgraph.entity';
 import { EmbeddingsService } from '../embeddings/embeddings.service';
 import * as fs from 'fs';
+import { ConfigService } from '@nestjs/config';
+
 
 @Injectable()
 export class SupabaseService implements OnModuleInit {
   constructor(
     @InjectRepository(Subgraph)
     private subgraphRepository: Repository<Subgraph>,
-    private embeddingsService: EmbeddingsService
-  ) {}
+    private embeddingsService: EmbeddingsService,
+    private configService: ConfigService
+  ) { }
 
   async onModuleInit() {
     console.log('SupabaseService onModuleInit');
@@ -45,12 +48,10 @@ export class SupabaseService implements OnModuleInit {
       const rows = csv.split('\n');
       for (const row of rows) {
         if (!row.trim()) continue;
-        
+
         const [url, name, queries, signal, id] = row.split(',');
         try {
           const { embedding } = await this.embeddingsService.generateEmbedding(name) as any;
-          console.log(`Generated embedding for ${name}`);
-
           await this.createSubgraph({
             id,
             name,
@@ -73,7 +74,7 @@ export class SupabaseService implements OnModuleInit {
 
     const { embedding } = await this.embeddingsService.generateEmbedding(name) as any;
 
-    const query =`
+    const query = `
         WITH vector_matches AS (
         SELECT id, 
                1 - (embedding <=> $1) as semantic_similarity
@@ -105,6 +106,62 @@ export class SupabaseService implements OnModuleInit {
     `;
 
     const result = await this.subgraphRepository.query(query, [`[${embedding.values.join(',')}]`, name]);
-    return result;
+
+    const subgraphs = []
+
+    for (const subgraph of result) {
+      let subgraphWithSchema = subgraph;
+      if (!subgraph.schema) {
+        console.log(`Retrieving schema for ${subgraph.id}`);
+        const schema = await this.retrieveSchema(subgraph.id);
+        console.log(`Updating schema for ${subgraph.id}`);
+        await this.updateSubgraph(subgraph.id, { schema });
+        subgraphWithSchema = await this.getSubgraphById(subgraph.id);
+        subgraphWithSchema.embedding = undefined;
+      }
+      subgraphs.push(subgraphWithSchema);
+    }
+
+    return subgraphs;
   }
+
+  async retrieveSchema(id: string) {
+
+    const query = `
+          query {
+            __schema {
+              types {
+                name
+                kind
+                fields {
+                  name
+                  type {
+                    name
+                    kind
+                    ofType {
+                      name
+                      kind
+                    }
+                  }
+                }
+              }
+            }
+          }
+    `;
+
+    const url = `https://gateway.thegraph.com/api/${this.configService.get('THEGRAPH_API_KEY')}/subgraphs/id/${id}`;
+    const result = await fetch(url, {
+      method: 'POST',
+      body: JSON.stringify({ query }),
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const data = await result.json() as { data: { __schema: any } };
+
+    return data.data.__schema;
+  }
+
+
 } 
