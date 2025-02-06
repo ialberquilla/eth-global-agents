@@ -3,11 +3,22 @@
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
-import { useState, useCallback } from "react"
+import { useState } from "react"
+
+type QueryMapping = {
+  field: string
+  alias: string
+}
+
+type QueryDetails = {
+  subgraph: string
+  query: string
+  mappings?: QueryMapping[]
+}
 
 type ResponseContent = {
   summary?: string
-  details?: string | any[]
+  details?: string | QueryDetails[]
   recommendedSubgraphs?: Array<{
     id: string
     url: string
@@ -32,10 +43,6 @@ export default function Home() {
   const [prompt, setPrompt] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [responses, setResponses] = useState<Response[]>([])
-
-  const addResponse = useCallback((newResponse: Response) => {
-    setResponses(prev => [...prev, newResponse])
-  }, [])
 
   const handleGenerate = async () => {
     if (!prompt.trim()) return
@@ -127,7 +134,7 @@ export default function Home() {
         <div key={index} className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
           <h3 className="text-lg font-semibold text-red-500 mb-2">{content.summary}</h3>
           <pre className="whitespace-pre-wrap text-red-400 font-mono text-sm">
-            {content.details}
+            {typeof content.details === 'string' ? content.details : JSON.stringify(content.details, null, 2)}
           </pre>
         </div>
       )
@@ -141,7 +148,7 @@ export default function Home() {
             {content.summary}
           </h3>
           <pre className="whitespace-pre-wrap text-slate-400 font-mono text-sm">
-            {content.details}
+            {typeof content.details === 'string' ? content.details : JSON.stringify(content.details, null, 2)}
           </pre>
         </div>
       )
@@ -155,7 +162,7 @@ export default function Home() {
             {content.summary}
           </h3>
           <div className="space-y-4">
-            {Array.isArray(content.details) && content.details.map((query: any, idx: number) => (
+            {Array.isArray(content.details) && content.details.map((query: QueryDetails, idx: number) => (
               <div key={idx} className="border border-slate-700 rounded-lg p-4">
                 <div className="text-slate-300 font-medium mb-2">Subgraph: {query.subgraph}</div>
                 <pre className="bg-slate-900/50 p-3 rounded-md text-slate-300 text-sm overflow-x-auto">
@@ -165,7 +172,7 @@ export default function Home() {
                   <div className="mt-3">
                     <div className="text-slate-400 text-sm mb-2">Field Mappings:</div>
                     <div className="grid grid-cols-3 gap-2 text-sm">
-                      {query.mappings.map((mapping: any, mapIdx: number) => (
+                      {query.mappings.map((mapping: QueryMapping, mapIdx: number) => (
                         <div key={mapIdx} className="bg-slate-900/30 p-2 rounded">
                           <span className="text-slate-400">{mapping.field}</span>
                           <span className="text-slate-500 mx-2">→</span>
