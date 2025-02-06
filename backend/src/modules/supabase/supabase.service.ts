@@ -162,6 +162,4 @@ export class SupabaseService implements OnModuleInit {
 
     return data.data.__schema;
   }
-
-
 } 

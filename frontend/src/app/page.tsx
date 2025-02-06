@@ -19,7 +19,7 @@ type ResponseContent = {
 }
 
 type Response = {
-  type?: 'validation' | 'matches' | 'search' | 'error'
+  type?: 'validation' | 'subgraphs' | 'matches' | 'search' | 'error'
   content?: ResponseContent | string
   message?: string
   error?: string
@@ -28,13 +28,13 @@ type Response = {
 export default function Home() {
   const [prompt, setPrompt] = useState("")
   const [isLoading, setIsLoading] = useState(false)
-  const [response, setResponse] = useState<Response | null>(null)
+  const [responses, setResponses] = useState<Response[]>([])
 
   const handleGenerate = async () => {
     if (!prompt.trim()) return
     
     setIsLoading(true)
-    setResponse(null)
+    setResponses([])
 
     try {
       const response = await fetch('http://localhost:3000/chat', {
@@ -64,122 +64,111 @@ export default function Home() {
 
             try {
               const parsedData = JSON.parse(data)
-              setResponse((prevResponse: Response | null) => {
-                if (!prevResponse) return parsedData
-                return { ...prevResponse, ...parsedData }
-              })
+              setResponses(prev => [...prev, parsedData])
             } catch (e) {
               // Handle plain text responses
-              setResponse((prevResponse: Response | null) => {
-                if (!prevResponse) return { message: data }
-                return { ...prevResponse, message: data }
-              })
+              setResponses(prev => [...prev, { message: data }])
             }
           }
         })
       }
     } catch (error) {
       console.error('Error generating API:', error)
-      setResponse({ error: 'Failed to generate API. Please try again.' })
+      setResponses([{ error: 'Failed to generate API. Please try again.' }])
     } finally {
       setIsLoading(false)
     }
   }
 
   const renderResponse = () => {
-    if (!response) return null
+    if (responses.length === 0) return null
 
-    if (response.error) {
-      return (
-        <div className="mt-6 p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-red-500">
-          {response.error}
-        </div>
-      )
-    }
-
-    if (response.type === 'error' && response.content) {
-      const content = response.content as ResponseContent
-      return (
-        <div className="mt-6 p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
-          <h3 className="text-lg font-semibold text-red-500 mb-2">{content.summary}</h3>
-          <pre className="whitespace-pre-wrap text-red-400 font-mono text-sm">
-            {content.details}
-          </pre>
-        </div>
-      )
-    }
-
-    if (response.type === 'validation' && response.content) {
-      const content = response.content as ResponseContent
-      return (
-        <div className="mt-6 space-y-4">
-          <div className="p-4 bg-slate-800/50 rounded-lg">
-            <h3 className="text-lg font-semibold text-slate-200 mb-2">{content.summary}</h3>
-            <pre className="whitespace-pre-wrap text-slate-400 font-mono text-sm">
-              {content.details}
-            </pre>
-          </div>
-        </div>
-      )
-    }
-
-    if (response.type === 'matches' && response.content) {
-      const content = response.content as ResponseContent
-      return (
-        <div className="mt-6 space-y-4">
-          <h3 className="text-lg font-semibold text-slate-200">Recommended Subgraphs:</h3>
-          <div className="space-y-3">
-            {content.recommendedSubgraphs?.map((subgraph, index) => (
-              <div key={index} className="p-4 bg-slate-800/50 rounded-lg">
-                <div className="font-medium text-slate-200">{subgraph.url}</div>
-                <div className="text-sm text-slate-400 mt-1">{subgraph.reason}</div>
-                <div className="text-sm text-slate-500 mt-1">Relevance: {subgraph.relevanceScore}</div>
+    return (
+      <div className="mt-6 space-y-4">
+        {responses.map((response, index) => {
+          if (response.error) {
+            return (
+              <div key={index} className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-red-500">
+                {response.error}
               </div>
-            ))}
-          </div>
-          
-          {content.suggestedFields && content.suggestedFields.length > 0 && (
-            <div>
-              <h4 className="text-md font-semibold text-slate-200">Suggested Fields:</h4>
-              <ul className="list-disc list-inside text-slate-400 mt-2">
-                {content.suggestedFields.map((field, index) => (
-                  <li key={index}>{field}</li>
-                ))}
-              </ul>
-            </div>
-          )}
+            )
+          }
 
-          {content.queryOptimizations && content.queryOptimizations.length > 0 && (
-            <div>
-              <h4 className="text-md font-semibold text-slate-200">Query Optimizations:</h4>
-              <ul className="list-disc list-inside text-slate-400 mt-2">
-                {content.queryOptimizations.map((opt, index) => (
-                  <li key={index}>{opt}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-      )
-    }
+          if (response.type === 'error' && response.content) {
+            const content = response.content as ResponseContent
+            return (
+              <div key={index} className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
+                <h3 className="text-lg font-semibold text-red-500 mb-2">{content.summary}</h3>
+                <pre className="whitespace-pre-wrap text-red-400 font-mono text-sm">
+                  {content.details}
+                </pre>
+              </div>
+            )
+          }
 
-    if (response.type === 'search' && response.content) {
-      return (
-        <div className="mt-6 p-4 bg-slate-800/50 rounded-lg">
-          <div className="text-slate-200">{response.content.toString()}</div>
-        </div>
-      )
-    }
+          if (response.type === 'validation' && response.content) {
+            return (
+              <div key={index} className="p-4 bg-slate-800/50 rounded-lg">
+                <h3 className="text-lg font-semibold text-slate-200 mb-2">
+                  {(response.content as ResponseContent).summary}
+                </h3>
+                <pre className="whitespace-pre-wrap text-slate-400 font-mono text-sm">
+                  {(response.content as ResponseContent).details}
+                </pre>
+              </div>
+            )
+          }
 
-    if (response.message) {
-      return (
-        <div className="mt-6 p-4 bg-slate-800/50 rounded-lg">
-          <div className="text-slate-200">{response.message}</div>
-        </div>
-      )
-    }
+          if (response.type === 'subgraphs' && response.content) {
+            return (
+              <div key={index} className="p-4 bg-slate-800/50 rounded-lg">
+                <h3 className="text-lg font-semibold text-slate-200 mb-2">
+                  {(response.content as ResponseContent).summary}
+                </h3>
+                <pre className="whitespace-pre-wrap text-slate-400 font-mono text-sm">
+                  {(response.content as ResponseContent).details}
+                </pre>
+              </div>
+            )
+          }
 
-    return null
+          if (response.type === 'matches' && response.content) {
+            return (
+              <div key={index}>
+                <h3 className="text-lg font-semibold text-slate-200">Recommended Subgraphs:</h3>
+                <div className="space-y-3">
+                  {(response.content as ResponseContent).recommendedSubgraphs?.map((subgraph, idx) => (
+                    <div key={idx} className="p-4 bg-slate-800/50 rounded-lg">
+                      <div className="font-medium text-slate-200">{subgraph.url}</div>
+                      <div className="text-sm text-slate-400 mt-1">{subgraph.reason}</div>
+                      <div className="text-sm text-slate-500 mt-1">Relevance: {subgraph.relevanceScore}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          }
+
+          if (response.type === 'search' && response.content) {
+            return (
+              <div key={index} className="p-4 bg-slate-800/50 rounded-lg">
+                <div className="text-slate-200">{response.content.toString()}</div>
+              </div>
+            )
+          }
+
+          if (response.message) {
+            return (
+              <div key={index} className="p-4 bg-slate-800/50 rounded-lg">
+                <div className="text-slate-200">{response.message}</div>
+              </div>
+            )
+          }
+
+          return null
+        })}
+      </div>
+    )
   }
 
   return (

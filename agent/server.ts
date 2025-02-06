@@ -4,7 +4,6 @@ import { HumanMessage } from "@langchain/core/messages";
 import { MemorySaver } from "@langchain/langgraph";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
-import { DynamicTool } from "@langchain/core/tools";
 import { z } from "zod";
 import * as dotenv from "dotenv";
 
@@ -29,17 +28,6 @@ const ValidationSchema = z.object({
       })
     })
   });
-
-const SubgraphMatchSchema = z.object({
-  recommendedSubgraphs: z.array(z.object({
-    id: z.string(),
-    url: z.string(),
-    reason: z.string(),
-    relevanceScore: z.number()
-  })),
-  suggestedFields: z.array(z.string()),
-  queryOptimizations: z.array(z.string())
-});
 
 const modifiers = {
     requestValidator: `
@@ -110,29 +98,12 @@ const modifiers = {
     
     Ensure your response is valid JSON and follows this structure exactly.
   `,
-  
-  subgraphMatcher: `
-    You are a specialized agent for matching user requirements to subgraphs.
-    You work with embeddings and semantic search results to:
-    1. Analyze semantic search results
-    2. Filter and rank matches based on requirements
-    3. Optimize query suggestions
-    
+  queryGenerator: `
+    You are a specialized agent for generating queries to subgraphs.
     You must respond with a JSON object having this exact structure:
     {
-      "recommendedSubgraphs": [
-        {
-          "id": string,
-          "url": string,
-          "reason": string,
-          "relevanceScore": number
-        }
-      ],
-      "suggestedFields": string[],
-      "queryOptimizations": string[]
+      "query": string
     }
-    
-    Ensure your response is valid JSON and follows this structure exactly.
   `
 };
 
@@ -154,9 +125,6 @@ function parseAndValidateOutput(output: string, schema: z.ZodSchema) {
   }
 }
 
-async function searchSubgraphs(requirements: any) {
-  return [];
-}
 
 async function initialize() {
   const llm = new ChatGoogleGenerativeAI({
@@ -171,22 +139,16 @@ async function initialize() {
     messageModifier: modifiers.requestValidator,
   });
 
-  const matcherAgent = createReactAgent({
+  const queryGeneratorAgent = createReactAgent({
     llm,
-    tools: [
-      new DynamicTool({
-        name: 'searchSubgraphs',
-        description: 'Search for relevant subgraphs using protocol name',
-        func: searchSubgraphs,
-      })
-    ],
+    tools: [],
     checkpointSaver: new MemorySaver(),
-    messageModifier: modifiers.subgraphMatcher,
+    messageModifier: modifiers.queryGenerator,
   });
 
   return {
     validatorAgent,
-    matcherAgent,
+    queryGeneratorAgent,
     config: { configurable: { thread_id: "Web3 Data Curator" } }
   };
 }
@@ -194,8 +156,8 @@ async function initialize() {
 let agents: any = null;
 let agentConfig: any = null;
 
-initialize().then(({ validatorAgent, matcherAgent, config }) => {
-  agents = { validatorAgent, matcherAgent };
+initialize().then(({ validatorAgent, queryGeneratorAgent, config }) => {
+  agents = { validatorAgent, queryGeneratorAgent };
   agentConfig = config;
   console.log('Agents initialized successfully');
 }).catch(error => {
@@ -258,10 +220,36 @@ app.post('/chat', async (req, res) => {
           }
         };
 
-        // Send validation response
         const validationMessage = `data: ${JSON.stringify(response)}\n\n`;
         console.log('Sending validation message:', validationMessage);
         res.write(validationMessage);
+
+        const subgrapsToAnalize = []
+
+        for (const protocol of extractedInfo.protocols) {
+          for (const chain of extractedInfo.chains) {
+            const subgraphs = await fetch('http://localhost:3002/api/subgraphs/similar?name=' + protocol + ' ' + chain).then(res => res.json()) as any[];
+
+            console.log('Subgraphs:', subgraphs);
+            subgrapsToAnalize.push(...subgraphs.filter((subgraph: any) => 
+              subgraph.schema && 
+              subgraph.name.toLowerCase().includes(protocol.toLowerCase()) && 
+              subgraph.name.toLowerCase().includes(chain.toLowerCase())
+            ));
+          }
+        }
+
+        const subgraphsResponse = {
+          type: 'subgraphs',
+          content: {
+            summary: `Found ${subgrapsToAnalize.length} subgraphs for your request`,
+            details: subgrapsToAnalize.map((subgraph: any) => `- ${subgraph.name}`)
+          }
+        };
+
+        const subgraphsMessage = `data: ${JSON.stringify(subgraphsResponse)}\n\n`;
+        console.log('Sending subgraphs message:', subgraphsMessage);
+        res.write(subgraphsMessage);
 
       } else {
         console.log('Request is invalid, sending error response');
