@@ -45,6 +45,17 @@ const ValidationSchema = z.object({
     }))
   });
 
+
+  const SubgraphSelectionSchema = z.object({
+    selectedSubgraphs: z.array(z.object({
+      protocol: z.string(),
+      chain: z.string(),
+      subgraphId: z.string(),
+      reason: z.string(),
+      confidence: z.number()
+    }))
+  });
+
 const modifiers = {
     requestValidator: `
     You are a specialized agent for validating and enriching web3 data requests.
@@ -179,7 +190,49 @@ const modifiers = {
         }
       ]
     }
-  `
+  `,
+  subgraphSelector: `
+  You are a specialized agent for selecting the most appropriate subgraphs for DeFi protocols.
+  Your job is to:
+  1. Analyze available subgraphs for each protocol/chain combination
+  2. Select the best subgraph based on naming patterns and protocol conventions
+  3. Provide reasoning for each selection
+  
+  Follow these naming conventions:
+  - Official protocol subgraphs usually follow patterns like:
+    * "{protocol}-v{version}-{chain}" (e.g., "aave-v3-arbitrum")
+    * "{protocol}-{chain}" (e.g., "uniswap-arbitrum")
+    * "{chain}/{protocol}" (e.g., "arbitrum/aave")
+  - For AAVE: prefer "aave-v3" or "aave-v2" over forks
+  - For Compound: prefer "compound-v3" or "compound-v2" over analytics
+  - For Uniswap: prefer official deployments with highest query count
+  
+  You must respond with a JSON object having this exact structure:
+  {
+    "selectedSubgraphs": [
+      {
+        "protocol": string,
+        "chain": string,
+        "subgraphId": string,
+        "reason": string,
+        "confidence": number (0-1)
+      }
+    ]
+  }
+
+  Example response:
+  {
+    "selectedSubgraphs": [
+      {
+        "protocol": "aave",
+        "chain": "arbitrum",
+        "subgraphId": "aave-v3-arbitrum",
+        "reason": "Official AAVE V3 deployment with highest query volume",
+        "confidence": 0.95
+      }
+    ]
+  }
+`
 };
 
 interface SubgraphInfo {
@@ -235,9 +288,17 @@ async function initialize() {
     messageModifier: modifiers.queryGenerator,
   });
 
+  const subgraphSelectorAgent = createReactAgent({
+    llm,
+    tools: [],
+    checkpointSaver: new MemorySaver(),
+    messageModifier: modifiers.subgraphSelector,
+  });
+
   return {
     validatorAgent,
     queryGeneratorAgent,
+    subgraphSelectorAgent,
     config: { configurable: { thread_id: "Web3 Data Curator" } }
   };
 }
@@ -245,8 +306,8 @@ async function initialize() {
 let agents: any = null;
 let agentConfig: any = null;
 
-initialize().then(({ validatorAgent, queryGeneratorAgent, config }) => {
-  agents = { validatorAgent, queryGeneratorAgent };
+initialize().then(({ validatorAgent, queryGeneratorAgent, subgraphSelectorAgent, config }) => {
+  agents = { validatorAgent, queryGeneratorAgent, subgraphSelectorAgent };
   agentConfig = config;
   console.log('Agents initialized successfully');
 }).catch(error => {
@@ -289,6 +350,7 @@ app.post('/chat', async (req, res) => {
         validationResult.messages[validationResult.messages.length - 1].content,
         ValidationSchema
       );
+      
 
       if (validatedData.isValidRequest) {
         const { extractedInfo } = validatedData;
@@ -311,37 +373,75 @@ app.post('/chat', async (req, res) => {
 
         sendSSEMessage(res, response);
 
-        const subgrapsToAnalize = []
+        const allSubgraphsForSelection: any[] = [];
 
         for (const protocol of extractedInfo.protocols) {
           for (const chain of extractedInfo.chains) {
             const subgraphs = await fetch(BACKEND_URL + '/api/subgraphs/similar?name=' + protocol + ' ' + chain).then(res => res.json()) as any[];
 
-            subgrapsToAnalize.push(...subgraphs.filter((subgraph: any) => 
-              subgraph.schema && 
-              subgraph.name.toLowerCase().includes(protocol.toLowerCase()) && 
-              subgraph.name.toLowerCase().includes(chain.toLowerCase())
-            ));
+            console.log({subgraphs});
+
+            allSubgraphsForSelection.push({
+              protocol,
+              chain,
+              availableSubgraphs: subgraphs.filter((s: any) => s.schema)
+            });
           }
         }
 
-        const subgraphsResponse = {
+        console.log({allSubgraphsForSelection});
+
+        const selectorInput = {
+          requirements: extractedInfo,
+          protocolsToSelect: allSubgraphsForSelection.map(item => ({
+            protocol: item.protocol,
+            chain: item.chain,
+            subgraphs: item.availableSubgraphs.map((s: any) => ({
+              id: s.id,
+              name: s.name,
+              queryVolume: s.queryVolume || 0,
+              stakeAmount: s.stakeAmount || 0
+            }))
+          }))
+        };
+
+        const selectionResult = await agents.subgraphSelectorAgent.invoke(
+          { messages: [new HumanMessage(JSON.stringify(selectorInput))] },
+          agentConfig
+        );
+
+        const selectedSubgraphs = parseAndValidateOutput(
+          selectionResult.messages[selectionResult.messages.length - 1].content,
+          SubgraphSelectionSchema
+        );
+
+        const selectionResponse = {
           type: 'subgraphs',
           content: {
-            summary: `Found ${subgrapsToAnalize.length} subgraphs for your request`,
-            details: subgrapsToAnalize.map((subgraph: any) => `- ${subgraph.name}`)
+            summary: `Selected best subgraphs for each protocol`,
+            details: selectedSubgraphs.selectedSubgraphs.map((s: any) => 
+              `- ${s.protocol} on ${s.chain}: ${s.subgraphId} (${Math.round(s.confidence * 100)}% confidence)\n`
+            ).join('\n')
           }
         };
 
-        sendSSEMessage(res, subgraphsResponse);
+        sendSSEMessage(res, selectionResponse);
 
         console.log('Generating queries for subgraphs...');
 
+        const subgrapsToAnalize = selectedSubgraphs.selectedSubgraphs.map((selected: any) => {
+          const protocolSubgraphs = allSubgraphsForSelection.find(
+            (item: any) => item.protocol === selected.protocol && item.chain === selected.chain
+          );
+          return protocolSubgraphs?.availableSubgraphs.find(
+            (s: any) => s.id === selected.subgraphId
+          );
+        }).filter(Boolean);
+
         const queryGenInput = {
           requirements: validatedData.extractedInfo,
-          subgraphs: subgrapsToAnalize.map(s => ({
+          subgraphs: subgrapsToAnalize.map((s: any) => ({
             id: s.id,
-            name: s.name,
             schema: s.schema,
             url: s.url
           }))
@@ -384,8 +484,6 @@ app.post('/chat', async (req, res) => {
             requirements: validatedData.extractedInfo
           })
         });
-
-        console.log('Stored queries:', storeResponse);
 
         const queryId = (await storeResponse.json() as { id: string }).id;
 
