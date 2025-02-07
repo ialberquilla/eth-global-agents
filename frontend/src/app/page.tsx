@@ -60,7 +60,7 @@ type Response = {
 
 export default function Home() {
 
-  const AGENT_URL = process.env.AGENT_URL || 'http://localhost:3000';
+  const AGENT_URL = process.env.NEXT_PUBLIC_AGENT_URL || 'http://localhost:3000';
 
   const [prompt, setPrompt] = useState("")
   const [isLoading, setIsLoading] = useState(false)
