@@ -6,6 +6,8 @@ import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { z } from "zod";
 import * as dotenv from "dotenv";
+import { ActionProvider, WalletProvider, Network, CreateAction } from "@coinbase/agentkit";
+import { generateAgentKitTemplate } from './templates/agentkit';
 
 dotenv.config();
 
@@ -390,14 +392,25 @@ app.post('/chat', async (req, res) => {
         const generatedQueryResponse = {
           type: 'generatedQuery',
           content: {
-            summary: `Generated aggregated query with standard requirements. To test it use the following command: curl -X GET ${BACKEND_URL}/api/subgraphs/execute?id=${queryId}`,
+            summary: `To test it use the following command: curl -X GET ${BACKEND_URL}/api/subgraphs/execute?id=${queryId}`,
             details: {
               id: queryId,
             }
           }
         };
 
+        const actionProviderCode = generateAgentKitTemplate(BACKEND_URL, validatedData.extractedInfo);
+
+        const codeGenerationResponse = {
+          type: 'generatedCode',
+          content: {
+            summary: 'Generated Coinbase Agent Kit Action Provider',
+            details: actionProviderCode
+          }
+        };
+
         sendSSEMessage(res, generatedQueryResponse);
+        sendSSEMessage(res, codeGenerationResponse);
       } else {
         const errorResponse = {
           type: 'error',

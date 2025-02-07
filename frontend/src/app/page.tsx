@@ -16,9 +16,24 @@ type QueryDetails = {
   mappings?: QueryMapping[]
 }
 
+type QueryMetadata = {
+  total_subgraphs: number;
+  successful_subgraphs: number;
+  execution_time_ms: number;
+  errors?: Array<{
+    subgraphId: string;
+    error: string;
+  }>;
+}
+
+type QueryResult = {
+  data: any[];
+  metadata: QueryMetadata;
+}
+
 type ResponseContent = {
   summary?: string
-  details?: string | QueryDetails[] | { id: string }
+  details?: string | QueryDetails[] | { id: string } | QueryResult
   recommendedSubgraphs?: Array<{
     id: string
     url: string
@@ -30,7 +45,7 @@ type ResponseContent = {
 }
 
 type Response = {
-  type?: 'validation' | 'subgraphs' | 'queries' | 'matches' | 'search' | 'error' | 'generatedQuery' | 'queryResult'
+  type?: 'validation' | 'subgraphs' | 'queries' | 'matches' | 'search' | 'error' | 'generatedQuery' | 'queryResult' | 'generatedCode'
   content?: ResponseContent | string
   message?: string
   error?: string
@@ -124,17 +139,20 @@ export default function Home() {
     try {
       const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3002'}/api/subgraphs/execute?id=${queryId}`);
       console.log('Response:', response);
-      const data = await response.json();
-      console.log({data});
-      setResponses(prev => [...prev, {
-        type: 'queryResult',
-        content: {
-          summary: 'Query Results',
-          details: data
-        }
-      }]);
+      const data = await response.json() as QueryResult;
+      console.log('Query Result Data:', JSON.stringify(data, null, 2));
+      
+      setQueryResults(data);
     } catch (error) {
       console.error('Error executing query:', error);
+      setQueryResults(null);
+      setResponses(prev => [...prev, {
+        type: 'error',
+        content: {
+          summary: 'Error executing query',
+          details: error instanceof Error ? error.message : 'Unknown error occurred'
+        }
+      } as Response]);
     } finally {
       setIsExecuting(false)
     }
@@ -194,11 +212,13 @@ export default function Home() {
                 {query.mappings && query.mappings.length > 0 && (
                   <div className="mt-3">
                     <div className="text-slate-400 text-sm mb-2">Field Mappings:</div>
-                    <div className="grid grid-cols-3 gap-2 text-sm">
+                    <div className="flex flex-wrap gap-2 text-sm">
                       {query.mappings.map((mapping: QueryMapping, mapIdx: number) => (
-                        <div key={mapIdx} className="bg-slate-900/30 p-2 rounded">
-                          <span className="text-slate-400">{mapping.field}</span>
-                          <span className="text-slate-500 mx-2">→</span>
+                        <div key={mapIdx} className="bg-slate-900/30 px-3 py-1.5 rounded-full flex items-center gap-2 text-xs">
+                          <span className="text-slate-400 font-medium">{mapping.field}</span>
+                          <svg className="w-3 h-3 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                          </svg>
                           <span className="text-slate-300">{mapping.alias}</span>
                         </div>
                       ))}
@@ -225,41 +245,60 @@ export default function Home() {
       const queryId = content.details && typeof content.details === 'object' ? (content.details as { id: string }).id : '';
       
       return (
-        <div key={index} className="p-4 bg-slate-800/50 rounded-lg space-y-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-3">
-              <div className="h-4 w-1 bg-slate-200 rounded-full"></div>
-              <h3 className="text-xl font-bold text-slate-200">
-                Generated Query
-              </h3>
-            </div>
-            <p className="text-slate-400 text-sm ml-5">
-              Generated aggregated query with standard requirements.
-            </p>
-          </div>
-          <pre className="bg-slate-900/50 p-4 rounded-md text-slate-300 text-sm overflow-x-auto whitespace-pre-wrap font-mono">
-            {content.summary}
-          </pre>
-          <Button 
-            onClick={() => executeQuery(queryId)}
-            disabled={isExecuting}
-            className="bg-blue-500 hover:bg-blue-600 text-white"
-          >
-            {isExecuting ? (
-              <div className="flex items-center space-x-2">
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                <span>Executing...</span>
+        <div key={index} className="p-4 bg-slate-800/50 rounded-lg">
+          <div className="flex flex-col gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-3">
+                <div className="h-4 w-1 bg-slate-200 rounded-full"></div>
+                <h3 className="text-xl font-bold text-slate-200">
+                  Generated Query
+                </h3>
               </div>
-            ) : (
-              'Execute Query'
+              <p className="text-slate-400 text-sm ml-5">
+                Generated aggregated query with standard requirements.
+              </p>
+            </div>
+            <pre className="bg-slate-900/50 p-4 rounded-md text-slate-300 text-sm overflow-x-auto whitespace-pre-wrap font-mono">
+              {content.summary}
+            </pre>
+            <Button 
+              onClick={() => executeQuery(queryId)}
+              disabled={isExecuting}
+              className="bg-blue-500 hover:bg-blue-600 text-white w-fit"
+            >
+              {isExecuting ? (
+                <div className="flex items-center space-x-2">
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  <span>Executing...</span>
+                </div>
+              ) : (
+                'Execute Query'
+              )}
+            </Button>
+            {queryResults && (
+              <div className="mt-4">
+                <div className="max-h-[32rem] overflow-y-auto rounded-lg border border-slate-700 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-slate-800/50 hover:scrollbar-thumb-slate-600">
+                  <pre className="bg-slate-900/50 p-4 text-slate-300 text-sm font-mono whitespace-pre overflow-x-auto">
+                    {JSON.stringify(queryResults.data, null, 2)}
+                  </pre>
+                </div>
+                <div className="mt-2 text-sm text-slate-400 flex gap-4">
+                  <span>Total Subgraphs: {queryResults.metadata.total_subgraphs}</span>
+                  <span>Successful: {queryResults.metadata.successful_subgraphs}</span>
+                  <span>Execution Time: {queryResults.metadata.execution_time_ms}ms</span>
+                </div>
+              </div>
             )}
-          </Button>
+          </div>
         </div>
       )
     }
 
     if (response.type === 'queryResult' && response.content) {
       const content = response.content as ResponseContent;
+      const queryResult = content.details as QueryResult;
+      console.log('Rendering query result:', content);
+      
       return (
         <div key={index} className="p-4 bg-slate-800/50 rounded-lg space-y-4">
           <div className="flex items-center gap-3 mb-2">
@@ -269,8 +308,50 @@ export default function Home() {
             </h3>
           </div>
           <div className="max-h-[32rem] overflow-y-auto rounded-lg border border-slate-700 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-slate-800/50 hover:scrollbar-thumb-slate-600">
-            <pre className="bg-slate-900/50 p-4 text-slate-300 text-sm">
-              {JSON.stringify(content.details, null, 2)}
+            <pre className="bg-slate-900/50 p-4 text-slate-300 text-sm font-mono whitespace-pre overflow-x-auto">
+              {JSON.stringify(queryResult.data, null, 2)}
+            </pre>
+          </div>
+          {/* Add metadata display */}
+          <div className="mt-2 text-sm text-slate-400">
+            <p>Total Subgraphs: {queryResult.metadata.total_subgraphs}</p>
+            <p>Successful: {queryResult.metadata.successful_subgraphs}</p>
+            <p>Execution Time: {queryResult.metadata.execution_time_ms}ms</p>
+            {queryResult.metadata.errors && queryResult.metadata.errors.length > 0 && (
+              <div className="mt-2">
+                <p className="text-red-400">Errors:</p>
+                <ul className="list-disc list-inside">
+                  {queryResult.metadata.errors.map((error: { subgraphId: string; error: string }, i: number) => (
+                    <li key={i} className="text-red-400">
+                      {error.subgraphId}: {error.error}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </div>
+      )
+    }
+
+    if (response.type === 'generatedCode' && response.content) {
+      const content = response.content as ResponseContent;
+      return (
+        <div key={index} className="p-4 bg-slate-800/50 rounded-lg space-y-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-3">
+              <div className="h-4 w-1 bg-slate-200 rounded-full"></div>
+              <h3 className="text-xl font-bold text-slate-200">
+                {content.summary}
+              </h3>
+            </div>
+            <p className="text-slate-400 text-sm ml-5">
+              Use this code to integrate the query with Coinbase Agent Kit
+            </p>
+          </div>
+          <div className="max-h-[32rem] overflow-y-auto rounded-lg border border-slate-700 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-slate-800/50 hover:scrollbar-thumb-slate-600">
+            <pre className="bg-slate-900/50 p-4 text-slate-300 text-sm font-mono whitespace-pre">
+              {typeof content.details === 'string' ? content.details : JSON.stringify(content.details, null, 2)}
             </pre>
           </div>
         </div>
