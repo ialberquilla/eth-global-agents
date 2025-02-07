@@ -39,4 +39,11 @@ export class SubgraphsController {
     ) {
         return this.supabaseService.storeQuery(path, subgraph_queries, requirements);
     }
+
+    @Post('/prompt')
+    storePrompt(
+        @Body('prompt') prompt: string
+    ) {
+        return this.supabaseService.storePrompt(prompt);
+    }
 }

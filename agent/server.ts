@@ -383,6 +383,15 @@ app.post('/chat', async (req, res) => {
       return res.status(503).json({ error: 'Agents not initialized' });
     }
 
+
+    const prompt = await fetch(BACKEND_URL + '/api/subgraphs/prompt', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ prompt: message })
+    });
+
     // Set headers for SSE
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');

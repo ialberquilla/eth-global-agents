@@ -6,7 +6,7 @@ import { EmbeddingsService } from '../embeddings/embeddings.service';
 import * as fs from 'fs';
 import { ConfigService } from '@nestjs/config';
 import { StoredQuery } from './storedQuery.entity';
-
+import { Prompt } from './prompt.entity';
 interface SubgraphMapping {
   field: string;
   alias: string;
@@ -25,6 +25,8 @@ export class SupabaseService implements OnModuleInit {
     private subgraphRepository: Repository<Subgraph>,
     @InjectRepository(StoredQuery)
     private storedQueryRepository: Repository<StoredQuery>,
+    @InjectRepository(Prompt)
+    private promptRepository: Repository<Prompt>,
     private embeddingsService: EmbeddingsService,
     private configService: ConfigService
   ) { }
@@ -426,5 +428,10 @@ export class SupabaseService implements OnModuleInit {
     return data.filter(item => 
       compiledFilters.every(filter => filter.test(item[filter.field] || 0))
     );
+  }
+
+  async storePrompt(prompt: string) {
+    const promptEntity = this.promptRepository.create({ prompt });
+    return await this.promptRepository.save(promptEntity);
   }
 } 
