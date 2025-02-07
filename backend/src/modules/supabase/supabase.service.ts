@@ -7,6 +7,16 @@ import * as fs from 'fs';
 import { ConfigService } from '@nestjs/config';
 import { StoredQuery } from './storedQuery.entity';
 
+interface SubgraphMapping {
+  field: string;
+  alias: string;
+  transformation?: string;
+}
+
+interface ProcessedMapping extends SubgraphMapping {
+  fieldParts: string[];
+  transformFn: ((value: any) => any) | null;
+}
 
 @Injectable()
 export class SupabaseService implements OnModuleInit {
@@ -173,133 +183,248 @@ export class SupabaseService implements OnModuleInit {
     return await this.storedQueryRepository.save(query);
   }
 
+  // Cache transformations at class level for reuse
+  private transformationFns: Record<string, (value: any) => any> = {
+    'parseFloat': (v: string) => parseFloat(v),
+    'parseInt': (v: string) => parseInt(v),
+    'toString': (v: any) => String(v),
+    'toFixed2': (v: number) => Number(parseFloat(String(v)).toFixed(2)),
+    'multiply100': (v: number) => v * 100,
+  };
 
-  async executeQuery(path: string) {
-    const query = await this.storedQueryRepository.findOne({ where: { path } });
+  async executeQuery(id: string) {
+    const startTime = Date.now();
+    const TIMEOUT_MS = 10000; // 10 second timeout
+    console.log(`[${new Date().toISOString()}] Starting query execution for id: ${id}`);
+
+    const query = await this.storedQueryRepository.findOne({ where: { id } });
     if (!query) {
       throw new Error('Query not found');
     }
+    console.log(`[${new Date().toISOString()}] Query fetched from DB in ${Date.now() - startTime}ms`);
+
+    console.log(`[${new Date().toISOString()}] Preparing ${query.subgraph_queries.length} subgraph queries`);
+    
+    // Prepare all fetch requests first with timeout
+    const fetchStartTime = Date.now();
+    const fetchPromises = query.subgraph_queries.map(sq => ({
+      subgraphId: sq.subgraphId,
+      promise: Promise.race([
+        fetch(
+          `https://gateway.thegraph.com/api/${this.configService.get('THEGRAPH_API_KEY')}/subgraphs/id/${sq.subgraphId}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: sq.query })
+          }
+        ),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Timeout')), TIMEOUT_MS)
+        )
+      ]),
+      mappings: sq.mappings
+    }));
+
+    // Execute all fetches in parallel and process results
     const results = await Promise.all(
-      query.subgraph_queries.map(async (sq: any) => {
+      fetchPromises.map(async ({ subgraphId, promise, mappings }) => {
+        const subgraphStartTime = Date.now();
         try {
-          const response = await fetch(
-            `https://gateway.thegraph.com/api/${this.configService.get('THEGRAPH_API_KEY')}/subgraphs/id/${sq.subgraphId}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ query: sq.query })
+          console.log(`[${new Date().toISOString()}] Fetching data from subgraph ${subgraphId}`);
+          const response = await promise as Response;
+          const fetchEndTime = Date.now();
+          console.log(`[${new Date().toISOString()}] Subgraph ${subgraphId} fetch completed in ${fetchEndTime - subgraphStartTime}ms`);
+
+          const data = await response.json() as { data?: Record<string, any> };
+          const jsonEndTime = Date.now();
+          console.log(`[${new Date().toISOString()}] Subgraph ${subgraphId} JSON parsed in ${jsonEndTime - fetchEndTime}ms`);
+          
+          // Validate response structure
+          if (!data?.data) {
+            throw new Error('Invalid response structure');
+          }
+
+          // Pre-process mappings for faster transformation
+          const processedMappings = mappings.map((m: SubgraphMapping): ProcessedMapping => ({
+            ...m,
+            fieldParts: m.field.split('.'),
+            transformFn: m.transformation ? this.transformationFns[m.transformation] : null
+          }));
+
+          const transformStartTime = Date.now();
+          const transformedData = this.transformSubgraphData(data, processedMappings);
+          console.log(`[${new Date().toISOString()}] Subgraph ${subgraphId} data transformed in ${Date.now() - transformStartTime}ms`);
+          
+          return {
+            subgraphId,
+            data: transformedData,
+            timing: {
+              fetch: fetchEndTime - subgraphStartTime,
+              parse: jsonEndTime - fetchEndTime,
+              transform: Date.now() - transformStartTime,
+              total: Date.now() - subgraphStartTime
             }
-          );
-
-          const data = await response.json();
-
-          console.log({ data });
-
-          const transformedData = await this.transformSubgraphData(data, sq.mappings);
-
-          console.log({ transformedData });
-
-          return {
-            subgraphId: sq.subgraphId,
-            data: transformedData
           };
-
         } catch (error) {
-          console.error(`Error fetching from subgraph ${sq.subgraphId}:`, error);
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          console.error(`[${new Date().toISOString()}] Error processing subgraph ${subgraphId}:`, errorMessage);
           return {
-            subgraphId: sq.subgraphId,
-            error: 'Failed to fetch data'
+            subgraphId,
+            error: errorMessage,
+            timing: { error: true, total: Date.now() - subgraphStartTime }
           };
         }
       })
     );
 
-    const mergedData = this.mergeSubgraphData(results, query.requirements);
+    // Filter out failed queries and proceed with successful ones
+    const successfulResults = results.filter(r => !r.error);
+    console.log(`[${new Date().toISOString()}] ${successfulResults.length} of ${results.length} subgraph queries succeeded`);
 
-    return mergedData;
+    console.log(`[${new Date().toISOString()}] All subgraph fetches completed in ${Date.now() - fetchStartTime}ms`);
+    console.log('Detailed timing per subgraph:', results.map(r => ({
+      subgraphId: r.subgraphId,
+      timing: r.timing
+    })));
 
+    const mergeStartTime = Date.now();
+    const mergedData = await this.mergeSubgraphData(successfulResults, query.requirements);
+    console.log(`[${new Date().toISOString()}] Data merged in ${Date.now() - mergeStartTime}ms`);
 
+    console.log(`[${new Date().toISOString()}] Total execution time: ${Date.now() - startTime}ms`);
+    return {
+      data: mergedData,
+      metadata: {
+        total_subgraphs: results.length,
+        successful_subgraphs: successfulResults.length,
+        execution_time_ms: Date.now() - startTime,
+        errors: results.filter(r => r.error).map(r => ({
+          subgraphId: r.subgraphId,
+          error: r.error
+        }))
+      }
+    };
   }
 
-  async transformSubgraphData(data: any, mappings: any[]) {
-    const result = [];
-
+  transformSubgraphData(data: any, processedMappings: ProcessedMapping[]) {
+    const transformStart = Date.now();
     const firstKey = Object.keys(data.data)[0];
+    if (!firstKey || !Array.isArray(data.data[firstKey])) {
+      throw new Error('Invalid data structure or empty response');
+    }
+    
     const items = data.data[firstKey];
+    const result = new Array(items.length);
 
-    for (const item of items) {
+    console.log(`Processing subgraph data with key: ${firstKey}, items: ${items.length}`);
+    if (items.length > 0) {
+      console.log('Sample raw item:', JSON.stringify(items[0], null, 2));
+    }
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
       const transformed: any = {};
 
-      for (const mapping of mappings) {
+      for (const mapping of processedMappings) {
         let value = item;
-
-        const fieldParts = mapping.field.split('.');
-        for (const part of fieldParts) {
+        
+        for (const part of mapping.fieldParts) {
           value = value?.[part];
+          if (value === undefined) break;
         }
 
-        if (mapping.transformation) {
-          value = await this.applyTransformation(value, mapping.transformation);
+        if (value !== undefined && mapping.transformFn) {
+          value = mapping.transformFn(value);
         }
 
         transformed[mapping.alias] = value;
       }
 
-      result.push(transformed);
+      result[i] = transformed;
+    }
+
+    const totalTime = Date.now() - transformStart;
+    if (items.length > 0) {
+      console.log(`Transformed ${items.length} items in ${totalTime}ms (${totalTime/items.length}ms per item)`);
+      console.log('Sample transformed item:', JSON.stringify(result[0], null, 2));
     }
 
     return result;
   }
 
-  async mergeSubgraphData(results: any[], requirements: any) {
-    const allData = results
-      .filter(r => !r.error)
-      .flatMap(r => r.data);
+  // Remove async since we're using cached functions
+  applyTransformation(value: any, transformation: string) {
+    return this.transformationFns[transformation]?.(value) ?? value;
+  }
 
-    if (requirements.specialRequirements.sortBy !== 'none') {
+  async mergeSubgraphData(results: any[], requirements: any) {
+    console.log('Starting data merge with results:', JSON.stringify(results.map(r => ({
+      subgraphId: r.subgraphId,
+      dataLength: r.data?.length || 0,
+      sampleData: r.data?.[0]
+    })), null, 2));
+
+    // Pre-allocate array size and use direct assignment instead of flatMap
+    const totalLength = results.reduce((sum, r) => !r.error && Array.isArray(r.data) ? sum + r.data.length : sum, 0);
+    console.log(`Total items to merge: ${totalLength}`);
+    
+    const allData = new Array(totalLength);
+    
+    let index = 0;
+    for (const result of results) {
+      if (!result.error && Array.isArray(result.data)) {
+        console.log(`Merging ${result.data.length} items from subgraph ${result.subgraphId}`);
+        for (const item of result.data) {
+          allData[index++] = item;
+        }
+      }
+    }
+
+    // Only sort if needed and use a more efficient sorting approach
+    if (requirements?.specialRequirements?.sortBy !== 'none') {
+      const sortField = requirements.specialRequirements.sortBy;
+      console.log(`Sorting by field: ${sortField}`);
       allData.sort((a, b) => {
-        const field = requirements.specialRequirements.sortBy;
-        return b[field] - a[field]; 
+        const aVal = a?.[sortField] || 0;
+        const bVal = b?.[sortField] || 0;
+        return bVal - aVal;
       });
     }
 
-    const filteredData = await this.applyFilters(allData, requirements.specialRequirements.additionalFilters);
+    // Apply filters in a single pass if possible
+    if (!requirements?.specialRequirements?.additionalFilters?.length) {
+      console.log(`Returning ${allData.length} items without filtering`);
+      return allData;
+    }
 
+    const filteredData = await this.applyFilters(allData, requirements.specialRequirements.additionalFilters);
+    console.log(`Returning ${filteredData.length} items after filtering`);
     return filteredData;
   }
 
   async applyFilters(data: any[], filters: string[]) {
-    return data.filter(item => {
-      return filters.every(filter => {
-        const [field, operation, value] = filter.split(':');
-        const itemValue = item[field];
-
-        switch (operation) {
-          case 'min':
-            return itemValue >= parseFloat(value);
-          case 'max':
-            return itemValue <= parseFloat(value);
-          default:
-            return true;
+    // Pre-compile filter conditions for better performance
+    const compiledFilters = filters.map(filter => {
+      const [field, operation, value] = filter.split(':');
+      const numValue = parseFloat(value);
+      
+      return {
+        field,
+        operation,
+        value: numValue,
+        test: (itemValue: number) => {
+          switch (operation) {
+            case 'min': return itemValue >= numValue;
+            case 'max': return itemValue <= numValue;
+            default: return true;
+          }
         }
-      });
+      };
     });
-  }
 
-
-  async applyTransformation(value: any, transformation: string) {
-    const transformations: Record<string, Function> = {
-      'parseFloat': (v: string) => parseFloat(v),
-      'parseInt': (v: string) => parseInt(v),
-      'toString': (v: any) => String(v),
-      'toFixed2': (v: number) => Number(parseFloat(String(v)).toFixed(2)),
-      'multiply100': (v: number) => v * 100, 
-    };
-
-    if (transformation in transformations) {
-      return transformations[transformation](value);
-    }
-
-    return value;
+    // Single pass filtering with pre-compiled conditions
+    return data.filter(item => 
+      compiledFilters.every(filter => filter.test(item[filter.field] || 0))
+    );
   }
 } 

@@ -18,7 +18,7 @@ type QueryDetails = {
 
 type ResponseContent = {
   summary?: string
-  details?: string | QueryDetails[]
+  details?: string | QueryDetails[] | { id: string }
   recommendedSubgraphs?: Array<{
     id: string
     url: string
@@ -30,7 +30,7 @@ type ResponseContent = {
 }
 
 type Response = {
-  type?: 'validation' | 'subgraphs' | 'queries' | 'matches' | 'search' | 'error'
+  type?: 'validation' | 'subgraphs' | 'queries' | 'matches' | 'search' | 'error' | 'generatedQuery' | 'queryResult'
   content?: ResponseContent | string
   message?: string
   error?: string
@@ -43,6 +43,8 @@ export default function Home() {
   const [prompt, setPrompt] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [responses, setResponses] = useState<Response[]>([])
+  const [isExecuting, setIsExecuting] = useState(false)
+  const [queryResults, setQueryResults] = useState<any>(null)
 
   const handleGenerate = async () => {
     if (!prompt.trim()) return
@@ -114,6 +116,27 @@ export default function Home() {
       setResponses(prev => [...prev, { error: 'Failed to generate API. Please try again.' }])
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  const executeQuery = async (queryId: string) => {
+    setIsExecuting(true)
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3002'}/api/subgraphs/execute?id=${queryId}`);
+      console.log('Response:', response);
+      const data = await response.json();
+      console.log({data});
+      setResponses(prev => [...prev, {
+        type: 'queryResult',
+        content: {
+          summary: 'Query Results',
+          details: data
+        }
+      }]);
+    } catch (error) {
+      console.error('Error executing query:', error);
+    } finally {
+      setIsExecuting(false)
     }
   }
 
@@ -193,6 +216,63 @@ export default function Home() {
       return (
         <div key={index} className="p-4 bg-slate-800/50 rounded-lg">
           <div className="text-slate-200">{response.message}</div>
+        </div>
+      )
+    }
+
+    if (response.type === 'generatedQuery' && response.content) {
+      const content = response.content as ResponseContent;
+      const queryId = content.details && typeof content.details === 'object' ? (content.details as { id: string }).id : '';
+      
+      return (
+        <div key={index} className="p-4 bg-slate-800/50 rounded-lg space-y-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-3">
+              <div className="h-4 w-1 bg-slate-200 rounded-full"></div>
+              <h3 className="text-xl font-bold text-slate-200">
+                Generated Query
+              </h3>
+            </div>
+            <p className="text-slate-400 text-sm ml-5">
+              Generated aggregated query with standard requirements.
+            </p>
+          </div>
+          <pre className="bg-slate-900/50 p-4 rounded-md text-slate-300 text-sm overflow-x-auto whitespace-pre-wrap font-mono">
+            {content.summary}
+          </pre>
+          <Button 
+            onClick={() => executeQuery(queryId)}
+            disabled={isExecuting}
+            className="bg-blue-500 hover:bg-blue-600 text-white"
+          >
+            {isExecuting ? (
+              <div className="flex items-center space-x-2">
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                <span>Executing...</span>
+              </div>
+            ) : (
+              'Execute Query'
+            )}
+          </Button>
+        </div>
+      )
+    }
+
+    if (response.type === 'queryResult' && response.content) {
+      const content = response.content as ResponseContent;
+      return (
+        <div key={index} className="p-4 bg-slate-800/50 rounded-lg space-y-4">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="h-4 w-1 bg-slate-200 rounded-full"></div>
+            <h3 className="text-xl font-bold text-slate-200">
+              {content.summary}
+            </h3>
+          </div>
+          <div className="max-h-[32rem] overflow-y-auto rounded-lg border border-slate-700 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-slate-800/50 hover:scrollbar-thumb-slate-600">
+            <pre className="bg-slate-900/50 p-4 text-slate-300 text-sm">
+              {JSON.stringify(content.details, null, 2)}
+            </pre>
+          </div>
         </div>
       )
     }

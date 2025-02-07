@@ -385,6 +385,19 @@ app.post('/chat', async (req, res) => {
 
         console.log('Stored queries:', storeResponse);
 
+        const queryId = (await storeResponse.json() as { id: string }).id;
+
+        const generatedQueryResponse = {
+          type: 'generatedQuery',
+          content: {
+            summary: `Generated aggregated query with standard requirements. To test it use the following command: curl -X GET ${BACKEND_URL}/api/subgraphs/execute?id=${queryId}`,
+            details: {
+              id: queryId,
+            }
+          }
+        };
+
+        sendSSEMessage(res, generatedQueryResponse);
       } else {
         const errorResponse = {
           type: 'error',
