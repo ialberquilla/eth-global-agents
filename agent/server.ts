@@ -317,10 +317,26 @@ initialize().then(({ validatorAgent, queryGeneratorAgent, subgraphSelectorAgent,
 
 // Helper function to send SSE message
 const sendSSEMessage = (res: any, data: any) => {
+  if (res.writableEnded) return;
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 };
 
+// Keep-alive function to prevent timeout
+const keepAlive = (res: any) => {
+  const interval = setInterval(() => {
+    if (res.writableEnded) {
+      clearInterval(interval);
+      return;
+    }
+    res.write(': keep-alive\n\n');
+  }, 15000); // Send keep-alive every 15 seconds
+  
+  return interval;
+};
+
 app.post('/chat', async (req, res) => {
+  let keepAliveInterval: any;
+  
   try {
     const { message } = req.body;
     console.log('Received message:', message);
@@ -335,9 +351,13 @@ app.post('/chat', async (req, res) => {
 
     // Set headers for SSE
     res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
     res.setHeader('Access-Control-Allow-Origin', '*');
+
+    // Start keep-alive
+    keepAliveInterval = keepAlive(res);
 
     try {
       console.log('Invoking validator agent...');
@@ -525,23 +545,25 @@ app.post('/chat', async (req, res) => {
 
     } catch (innerError) {
       console.error('Inner error:', innerError);
-      sendSSEMessage(res, {
-        type: 'error',
-        content: {
-          summary: 'Sorry, I encountered an error processing your request.',
-          details: 'Please try again with your request.'
-        }
-      });
-      sendSSEMessage(res, '[DONE]');
-      res.end();
+      if (!res.writableEnded) {
+        sendSSEMessage(res, {
+          type: 'error',
+          content: {
+            summary: 'Sorry, I encountered an error processing your request.',
+            details: 'Please try again with your request.'
+          }
+        });
+        sendSSEMessage(res, '[DONE]');
+        res.end();
+      }
     }
-
   } catch (error) {
     console.error('Outer error:', error);
-    if (!res.headersSent) {
+    if (!res.headersSent && !res.writableEnded) {
       res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
       res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
       res.setHeader('Access-Control-Allow-Origin', '*');
       
       sendSSEMessage(res, {
@@ -553,6 +575,10 @@ app.post('/chat', async (req, res) => {
       });
       sendSSEMessage(res, '[DONE]');
       res.end();
+    }
+  } finally {
+    if (keepAliveInterval) {
+      clearInterval(keepAliveInterval);
     }
   }
 });

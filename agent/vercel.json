@@ -14,8 +14,15 @@
         "headers": {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-          "Access-Control-Allow-Headers": "X-Requested-With, Content-Type, Accept"
+          "Access-Control-Allow-Headers": "X-Requested-With, Content-Type, Accept",
+          "Cache-Control": "no-cache, no-transform",
+          "X-Accel-Buffering": "no"
         }
       }
-    ]
+    ],
+    "functions": {
+      "server.ts": {
+        "maxDuration": 60
+      }
+    }
   }
