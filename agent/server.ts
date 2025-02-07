@@ -1,3 +1,6 @@
+// Set maximum duration for Vercel Function
+export const maxDuration = 60;
+
 import express from 'express';
 import cors from 'cors';
 import { HumanMessage } from "@langchain/core/messages";
