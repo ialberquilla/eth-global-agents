@@ -16,6 +16,13 @@ type QueryDetails = {
   mappings?: QueryMapping[]
 }
 
+type SubgraphData = {
+  tvl?: number;
+  volume_24h?: number;
+  price?: number;
+  [key: string]: number | undefined; // Allow for dynamic fields
+}
+
 type QueryMetadata = {
   total_subgraphs: number;
   successful_subgraphs: number;
@@ -27,7 +34,7 @@ type QueryMetadata = {
 }
 
 type QueryResult = {
-  data: any[];
+  data: SubgraphData[];
   metadata: QueryMetadata;
 }
 
@@ -59,7 +66,7 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false)
   const [responses, setResponses] = useState<Response[]>([])
   const [isExecuting, setIsExecuting] = useState(false)
-  const [queryResults, setQueryResults] = useState<any>(null)
+  const [queryResults, setQueryResults] = useState<QueryResult | null>(null)
 
   const handleGenerate = async () => {
     if (!prompt.trim()) return
