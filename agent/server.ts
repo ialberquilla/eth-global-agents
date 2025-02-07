@@ -315,10 +315,35 @@ initialize().then(({ validatorAgent, queryGeneratorAgent, subgraphSelectorAgent,
   process.exit(1);
 });
 
-// Helper function to send SSE message
-const sendSSEMessage = (res: any, data: any) => {
+// Helper function to send SSE message with retry logic
+const sendSSEMessage = async (res: any, data: any) => {
   if (res.writableEnded) return;
-  res.write(`data: ${JSON.stringify(data)}\n\n`);
+  
+  const maxRetries = 3;
+  let retries = 0;
+  
+  const tryWrite = async () => {
+    try {
+      if (typeof data === 'string') {
+        res.write(`data: ${data}\n\n`);
+      } else {
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+      }
+      // Immediately flush the response
+      if (typeof res.flush === 'function') {
+        res.flush();
+      }
+    } catch (error) {
+      console.error('Error writing SSE message:', error);
+      if (retries < maxRetries) {
+        retries++;
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        await tryWrite();
+      }
+    }
+  };
+  
+  await tryWrite();
 };
 
 // Keep-alive function to prevent timeout
@@ -328,8 +353,17 @@ const keepAlive = (res: any) => {
       clearInterval(interval);
       return;
     }
-    res.write(': keep-alive\n\n');
-  }, 15000); // Send keep-alive every 15 seconds
+    try {
+      res.write(': keep-alive\n\n');
+      // Immediately flush the response
+      if (typeof res.flush === 'function') {
+        res.flush();
+      }
+    } catch (error) {
+      console.error('Error sending keep-alive:', error);
+      clearInterval(interval);
+    }
+  }, 5000); // Send keep-alive every 5 seconds instead of 15
   
   return interval;
 };
@@ -356,7 +390,7 @@ app.post('/chat', async (req, res) => {
     res.setHeader('X-Accel-Buffering', 'no');
     res.setHeader('Access-Control-Allow-Origin', '*');
 
-    // Start keep-alive
+    // Start keep-alive before any processing
     keepAliveInterval = keepAlive(res);
 
     try {
@@ -366,11 +400,14 @@ app.post('/chat', async (req, res) => {
         agentConfig
       );
 
+      console.log('Validation result received');
+      
       const validatedData = parseAndValidateOutput(
         validationResult.messages[validationResult.messages.length - 1].content,
         ValidationSchema
       );
       
+      console.log('Validation data parsed:', validatedData);
 
       if (validatedData.isValidRequest) {
         const { extractedInfo } = validatedData;
@@ -391,15 +428,19 @@ app.post('/chat', async (req, res) => {
           }
         };
 
-        sendSSEMessage(res, response);
+        await sendSSEMessage(res, response);
+        console.log('Validation response sent');
+
+        // Add a small delay between messages
+        await new Promise(resolve => setTimeout(resolve, 100));
 
         const allSubgraphsForSelection: any[] = [];
 
         for (const protocol of extractedInfo.protocols) {
           for (const chain of extractedInfo.chains) {
+            console.log(`Fetching subgraphs for ${protocol} on ${chain}`);
             const subgraphs = await fetch(BACKEND_URL + '/api/subgraphs/similar?name=' + protocol + ' ' + chain).then(res => res.json()) as any[];
-
-            console.log({subgraphs});
+            console.log(`Found ${subgraphs.length} subgraphs for ${protocol} on ${chain}`);
 
             allSubgraphsForSelection.push({
               protocol,
@@ -409,7 +450,7 @@ app.post('/chat', async (req, res) => {
           }
         }
 
-        console.log({allSubgraphsForSelection});
+        console.log('All subgraphs fetched:', allSubgraphsForSelection);
 
         const selectorInput = {
           requirements: extractedInfo,
@@ -425,15 +466,18 @@ app.post('/chat', async (req, res) => {
           }))
         };
 
+        console.log('Invoking subgraph selector agent');
         const selectionResult = await agents.subgraphSelectorAgent.invoke(
           { messages: [new HumanMessage(JSON.stringify(selectorInput))] },
           agentConfig
         );
+        console.log('Subgraph selection result received');
 
         const selectedSubgraphs = parseAndValidateOutput(
           selectionResult.messages[selectionResult.messages.length - 1].content,
           SubgraphSelectionSchema
         );
+        console.log('Selected subgraphs:', selectedSubgraphs);
 
         const selectionResponse = {
           type: 'subgraphs',
@@ -445,10 +489,13 @@ app.post('/chat', async (req, res) => {
           }
         };
 
-        sendSSEMessage(res, selectionResponse);
+        await sendSSEMessage(res, selectionResponse);
+        console.log('Selection response sent');
+
+        // Add a small delay between messages
+        await new Promise(resolve => setTimeout(resolve, 100));
 
         console.log('Generating queries for subgraphs...');
-
         const subgrapsToAnalize = selectedSubgraphs.selectedSubgraphs.map((selected: any) => {
           const protocolSubgraphs = allSubgraphsForSelection.find(
             (item: any) => item.protocol === selected.protocol && item.chain === selected.chain
@@ -467,15 +514,18 @@ app.post('/chat', async (req, res) => {
           }))
         };
 
+        console.log('Invoking query generator agent');
         const queryGenResult = await agents.queryGeneratorAgent.invoke(
           { messages: [new HumanMessage(JSON.stringify(queryGenInput))] },
           agentConfig
         );
+        console.log('Query generation result received');
 
         const parsedQueries = parseAndValidateOutput(
           queryGenResult.messages[queryGenResult.messages.length - 1].content,
           QueryGeneratorSchema
         );
+        console.log('Queries parsed');
 
         const queriesResponse = {
           type: 'queries',
@@ -489,10 +539,13 @@ app.post('/chat', async (req, res) => {
           }
         };
 
-        sendSSEMessage(res, queriesResponse);
+        await sendSSEMessage(res, queriesResponse);
+        console.log('Queries response sent');
+
+        // Add a small delay between messages
+        await new Promise(resolve => setTimeout(resolve, 100));
 
         console.log('Storing queries...');
-
         const storeResponse = await fetch(BACKEND_URL + '/api/subgraphs/store', {
           method: 'POST',
           headers: {
@@ -506,6 +559,7 @@ app.post('/chat', async (req, res) => {
         });
 
         const queryId = (await storeResponse.json() as { id: string }).id;
+        console.log('Queries stored with ID:', queryId);
 
         const generatedQueryResponse = {
           type: 'generatedQuery',
@@ -517,6 +571,12 @@ app.post('/chat', async (req, res) => {
           }
         };
 
+        await sendSSEMessage(res, generatedQueryResponse);
+        console.log('Generated query response sent');
+
+        // Add a small delay between messages
+        await new Promise(resolve => setTimeout(resolve, 100));
+
         const actionProviderCode = generateAgentKitTemplate(BACKEND_URL, validatedData.extractedInfo);
 
         const codeGenerationResponse = {
@@ -527,8 +587,11 @@ app.post('/chat', async (req, res) => {
           }
         };
 
-        sendSSEMessage(res, generatedQueryResponse);
-        sendSSEMessage(res, codeGenerationResponse);
+        await sendSSEMessage(res, codeGenerationResponse);
+        console.log('Code generation response sent');
+
+        // Add a small delay before ending
+        await new Promise(resolve => setTimeout(resolve, 100));
       } else {
         const errorResponse = {
           type: 'error',
@@ -537,23 +600,24 @@ app.post('/chat', async (req, res) => {
             details: 'Please provide a request related to blockchain or web3 data analysis.'
           }
         };
-        sendSSEMessage(res, errorResponse);
+        await sendSSEMessage(res, errorResponse);
       }
 
-      sendSSEMessage(res, '[DONE]');
+      await sendSSEMessage(res, '[DONE]');
+      console.log('Stream complete');
       res.end();
 
     } catch (innerError) {
       console.error('Inner error:', innerError);
       if (!res.writableEnded) {
-        sendSSEMessage(res, {
+        await sendSSEMessage(res, {
           type: 'error',
           content: {
             summary: 'Sorry, I encountered an error processing your request.',
-            details: 'Please try again with your request.'
+            details: innerError instanceof Error ? innerError.message : 'Please try again with your request.'
           }
         });
-        sendSSEMessage(res, '[DONE]');
+        await sendSSEMessage(res, '[DONE]');
         res.end();
       }
     }
@@ -566,14 +630,14 @@ app.post('/chat', async (req, res) => {
       res.setHeader('X-Accel-Buffering', 'no');
       res.setHeader('Access-Control-Allow-Origin', '*');
       
-      sendSSEMessage(res, {
+      await sendSSEMessage(res, {
         type: 'error',
         content: {
           summary: 'An unexpected error occurred.',
-          details: 'Please try again with your request.'
+          details: error instanceof Error ? error.message : 'Please try again with your request.'
         }
       });
-      sendSSEMessage(res, '[DONE]');
+      await sendSSEMessage(res, '[DONE]');
       res.end();
     }
   } finally {
