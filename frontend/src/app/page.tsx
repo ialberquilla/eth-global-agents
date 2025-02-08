@@ -423,7 +423,7 @@ export default function Home() {
           <div className="space-y-4">
             <div className="relative">
               <Textarea
-                placeholder="e.g., I need to get realtime Uniswap data from 5 chains"
+                placeholder="e.g., I need to get Uniswap V3 data on Base and Optimism to find the best APY"
                 className="min-h-[120px] resize-none bg-slate-800/50 border-slate-700 text-slate-100 placeholder:text-slate-500 focus:border-blue-500"
                 value={prompt}
                 onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setPrompt(e.target.value)}
