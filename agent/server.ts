@@ -138,6 +138,9 @@ const modifiers = {
     - Add proper field aliases directly in the query
     - Include pagination (first: 1000)
     - Don't use fragments unless absolutely necessary
+    - Only include transformation field when you have a specific transformation to apply
+    - Common transformations: "parseFloat" for numeric values, "parseInt" for integers
+    - Omit the transformation field entirely if no transformation is needed (don't use null)
 
     You must respond with a JSON object having this exact structure:
     {
@@ -149,7 +152,7 @@ const modifiers = {
             {
               "field": string,
               "alias": string,
-              "transformation": string (optional)
+              "transformation": string (optional, omit if no transformation needed)
             }
           ]
         }
@@ -180,6 +183,10 @@ const modifiers = {
               "field": "totalLiquidity",
               "alias": "total_supplied",
               "transformation": "parseFloat"
+            },
+            {
+              "field": "id",
+              "alias": "reserve_id"
             },
             {
               "field": "liquidityRate",

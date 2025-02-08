@@ -8,6 +8,7 @@ import { useState } from "react"
 type QueryMapping = {
   field: string
   alias: string
+  transformation?: string
 }
 
 type QueryDetails = {
