@@ -61,6 +61,7 @@ type Response = {
 export default function Home() {
 
   const AGENT_URL = process.env.NEXT_PUBLIC_AGENT_URL || 'http://localhost:3000';
+  const IS_TEE = process.env.NEXT_PUBLIC_TEE === 'true';
 
   const [prompt, setPrompt] = useState("")
   const [isLoading, setIsLoading] = useState(false)
@@ -379,6 +380,38 @@ export default function Home() {
           Start building for free, then scale to millions of users
         </p>
       </div>
+
+      {/* Conditional Notice Section */}
+      {IS_TEE ? (
+        <div className="w-full max-w-4xl mb-8 p-4 bg-amber-500/10 border border-amber-500/20 rounded-lg text-center">
+          <p className="text-slate-200">
+            This deployment uses an Autonome TEE system that can be terminated if it does not work. Try our{' '}
+            <a 
+              href="https://datrix.vercel.app/" 
+              target="_blank" 
+              rel="noopener noreferrer" 
+              className="text-amber-400 hover:text-amber-300 underline underline-offset-2"
+            >
+              standard deployment
+            </a>
+            {' '}instead.
+          </p>
+        </div>
+      ) : (
+        <div className="w-full max-w-4xl mb-8 p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg text-center">
+          <p className="text-slate-200">
+            Want enhanced security? Try our{' '}
+            <a 
+              href="https://datrix-tee.vercel.app/" 
+              target="_blank" 
+              rel="noopener noreferrer" 
+              className="text-blue-400 hover:text-blue-300 underline underline-offset-2"
+            >
+              TEE deployment on Autonome
+            </a>
+          </p>
+        </div>
+      )}
 
       {/* Main Input Section */}
       <Card className="w-full max-w-4xl bg-slate-900/50 border-slate-800 shadow-xl">
